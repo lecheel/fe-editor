@@ -1,25 +1,10 @@
 #pragma once
 #include "types.hpp"
+#include "diff.hpp"
 #include "syntax.hpp"
 #include <memory>
 #include <string>
 #include <vector>
-
-enum class HunkType {
-    ADDED,
-    MODIFIED,
-    DELETED
-};
-
-struct GitHunk {
-    int orig_start{0};  // 0-based line in base version
-    int orig_count{0};  // line count in base version
-    int cur_start{0};   // 0-based line in current buffer
-    int cur_count{0};   // line count in current buffer
-    HunkType type{HunkType::MODIFIED};
-    std::vector<std::string> orig_lines;
-    std::vector<std::string> cur_lines;
-};
 
 class TextBuffer {
 public:

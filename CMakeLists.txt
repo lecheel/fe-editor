@@ -12,7 +12,9 @@ add_executable(fe
     main.cpp
     src/buffer.cpp
     src/config.cpp
+    src/diff.cpp
     src/engine.cpp
+    src/git.cpp
     src/log.cpp
     src/syntax.cpp
 )
