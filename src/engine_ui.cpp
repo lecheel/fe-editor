@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <set>
 
+extern int g_hunk_marker_style;
+
 namespace fs = std::filesystem;
 
 void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
@@ -505,7 +507,8 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     } else {
                         ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
                     }
-                    char sign_buf[3] = {git_sign, ' ', '\0'};
+                    char disp_sign = (g_hunk_marker_style == 1 && git_sign != ' ') ? '|' : git_sign;
+                    char sign_buf[3] = {disp_sign, ' ', '\0'};
                     ncplane_putstr_yx(stdplane, draw_y, win.x + gutter_w - 2, sign_buf);
                 } else {
                     ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
@@ -524,7 +527,8 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 } else {
                     ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
                 }
-                char sign_buf[3] = {git_sign, ' ', '\0'};
+                char disp_sign = (g_hunk_marker_style == 1 && git_sign != ' ') ? '|' : git_sign;
+                char sign_buf[3] = {disp_sign, ' ', '\0'};
                 ncplane_putstr_yx(stdplane, draw_y, win.x, sign_buf);
             }
         }
@@ -603,7 +607,7 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    const int total_items = 4;
+    const int total_items = 5;
     if (key == NCKEY_UP || key == 'k' || key == 'K') {
         settings_selected_idx = (settings_selected_idx + total_items - 1) % total_items;
     } else if (key == NCKEY_DOWN || key == 'j' || key == 'J') {
@@ -639,6 +643,9 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
             case 3:
                 config.settings.highlight_current_line = !config.settings.highlight_current_line;
                 break;
+            case 4:
+                g_hunk_marker_style = (g_hunk_marker_style + 1) % 2;
+                break;
         }
         config.save();
     }
@@ -647,7 +654,7 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
 void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen_w) {
     int popup_w = std::max(36, static_cast<int>(screen_w * 0.50));
     popup_w = std::min(popup_w, static_cast<int>(screen_w) - 2);
-    int popup_h = 10;
+    int popup_h = 11;
     int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
     int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
 
@@ -693,12 +700,14 @@ void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen
     else if (config.settings.line_number_mode == LineNumberMode::HYBRID) mode_str = "Hybrid";
 
     std::string w_str = (config.settings.line_number_width == 0) ? "Auto" : std::to_string(config.settings.line_number_width);
+    std::string hunk_style_str = (g_hunk_marker_style == 1) ? "< | >" : "< ~-= >";
 
     std::vector<Item> items = {
         {"Show Line Numbers", config.settings.show_line_numbers ? "[ ON ]" : "[ OFF ]"},
         {"Line Number Style", "< " + mode_str + " >"},
         {"Hunk/Gutter Width", "< " + w_str + " >"},
-        {"Highlight Active", config.settings.highlight_current_line ? "[ ON ]" : "[ OFF ]"}
+        {"Highlight Active", config.settings.highlight_current_line ? "[ ON ]" : "[ OFF ]"},
+        {"Hunk Gutter Style", hunk_style_str}
     };
 
     for (size_t i = 0; i < items.size(); ++i) {

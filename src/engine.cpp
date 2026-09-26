@@ -121,7 +121,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "",
             "// --- Settings & Gutter (F9) -----------------------------------------------",
             "//   [F9]            Toggle rounded settings popup (50% screen width)",
-            "//   Options:        Toggle line numbers, Style (Absolute/Relative/Hybrid), Width, Active highlight",
+            "//   Options:        Toggle line numbers, Style (Absolute/Relative/Hybrid), Width, Active highlight, Hunk style (~-= or |)",
             "",
             "// --- Navigation & Editing ------------------------------------------------",
             "//   h / j / k / l   Move left, down, up, right (also Arrows, Home, End, PgUp, PgDown)",

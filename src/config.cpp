@@ -6,6 +6,8 @@
 #include <cctype>
 #include <vector>
 
+int g_hunk_marker_style = 0; // 0: ~-= (signs), 1: | (bars)
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -121,6 +123,8 @@ void ConfigManager::load_json(const std::string& path) {
                             settings.highlight_current_line = (v == "1" || v == "true");
                         } else if (k == "whichkey_delay_ms") {
                             try { settings.whichkey_delay_ms = std::stoi(v); } catch (...) {}
+                        } else if (k == "hunk_marker_style") {
+                            try { g_hunk_marker_style = std::stoi(v); } catch (...) {}
                         }
                     }
                     j++;
@@ -184,7 +188,8 @@ void ConfigManager::save_json(const std::string& path) {
     out << "    \"line_number_mode\": " << static_cast<int>(settings.line_number_mode) << ",\n";
     out << "    \"whichkey_delay_ms\": " << settings.whichkey_delay_ms << ",\n";
     out << "    \"line_number_width\": " << settings.line_number_width << ",\n";
-    out << "    \"highlight_current_line\": " << (settings.highlight_current_line ? "1" : "0") << "\n";
+    out << "    \"highlight_current_line\": " << (settings.highlight_current_line ? "1" : "0") << ",\n";
+    out << "    \"hunk_marker_style\": " << g_hunk_marker_style << "\n";
     out << "  },\n";
     out << "  \"positions\": {\n";
     size_t idx = 0;
