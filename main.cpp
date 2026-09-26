@@ -4,6 +4,7 @@
 #include <string>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <map>
@@ -11,7 +12,10 @@
 
 enum class Mode {
     NORMAL,
-    INSERT
+    INSERT,
+    VISUAL,
+    VISUAL_BLOCK,
+    COMMAND
 };
 
 enum class SplitType {
@@ -41,16 +45,19 @@ struct BufferSnapshot {
 class TextBuffer {
 public:
     std::string name;
+    std::string file_path;
     std::vector<std::string> lines;
     std::vector<BufferSnapshot> undo_stack;
     std::vector<BufferSnapshot> redo_stack;
+    bool modified{false};
 
-    TextBuffer(std::string name, std::vector<std::string> initial_lines)
-        : name(std::move(name)), lines(std::move(initial_lines)) {}
+    TextBuffer(std::string name, std::vector<std::string> initial_lines, std::string path = "")
+        : name(std::move(name)), file_path(std::move(path)), lines(std::move(initial_lines)) {}
 
     void push_undo(const std::vector<Cursor>& cursors) {
         undo_stack.push_back({lines, cursors});
         redo_stack.clear();
+        modified = true;
         if (undo_stack.size() > 100) {
             undo_stack.erase(undo_stack.begin());
         }
@@ -63,6 +70,7 @@ public:
         undo_stack.pop_back();
         lines = state.lines;
         cursors = state.cursors;
+        modified = true;
         return true;
     }
 
@@ -73,6 +81,20 @@ public:
         redo_stack.pop_back();
         lines = state.lines;
         cursors = state.cursors;
+        modified = true;
+        return true;
+    }
+
+    bool save_to_file(const std::string& path_override = "") {
+        std::string target = !path_override.empty() ? path_override : (!file_path.empty() ? file_path : name);
+        std::ofstream out(target);
+        if (!out.is_open()) return false;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            out << lines[i] << "\n";
+        }
+        file_path = target;
+        name = target;
+        modified = false;
         return true;
     }
 };
@@ -87,6 +109,7 @@ struct Window {
     int scroll_y{0};
     int scroll_x{0};
     std::vector<Cursor> cursors{{0, 0}};
+    Cursor visual_anchor{0, 0};
 
     void deduplicate_cursors() {
         std::sort(cursors.begin(), cursors.end());
@@ -127,27 +150,29 @@ public:
 
         // Seed initial buffers
         buffers.push_back(std::make_shared<TextBuffer>("buffer-1.cpp", std::vector<std::string>{
-            "// --- Buffer 1: Multi-Window & Multi-Buffer Engine ---",
+            "// --- Buffer 1: Multi-Window, Visual Block & Command Mode ---",
             "#include <iostream>",
             "",
             "void demo() {",
-            "    std::cout << \"Multi-cursor & Multi-window ready!\" << std::endl;",
+            "    int a = 100;",
+            "    int b = 200;",
+            "    int c = 300;",
+            "    std::cout << \"Visual Block and : commands active!\" << std::endl;",
             "}",
             "",
-            "// Navigation: h/j/k/l, Arrows, PgUp, PgDown, Home, End",
-            "// Multi-Cursor: [J] Add below, [K] Add above, [Esc] Reset to single",
-            "// Buffers: [b] Next buffer, [B] Prev buffer",
-            "// Splits: [Alt-s] Horiz split, [Alt-v] Vert split, [Tab] Cycle win, [Alt-x] Close win",
-            "// Undo/Redo: [u] Undo, [U] Redo",
-            "// Quit: [Alt-q]"
+            "// Visual Block: [Ctrl-v] start block, [I]/[A] multi-cursor insert, [d]/[x] delete block",
+            "// Commands:     [:] enter command mode (:w, :q, :wq, :q!, :sp, :vsp, :b <n>)",
+            "// Navigation:   h/j/k/l, Arrows, PgUp, PgDown, Home, End",
+            "// Multi-Cursor: [C] Add below, [Alt-k] Add above, [Esc] Normal/Reset",
+            "// Splits:       [Alt-s] Horiz split, [Alt-v] Vert split, [Tab] Cycle win, [Alt-x] Close"
         }));
 
         buffers.push_back(std::make_shared<TextBuffer>("buffer-2.md", std::vector<std::string>{
             "# Documentation & Notes",
             "",
-            "- Multi-buffer editing active.",
-            "- Independent undo/redo per buffer.",
-            "- Synchronized simultaneous edits across all active cursors."
+            "- Visual Mode: 'v' character visual, 'Ctrl-v' block visual.",
+            "- In Block Mode: press 'I' to insert at column across all lines.",
+            "- Command Mode: ':w [file]', ':q', ':wq', ':q!'."
         }));
 
         // Initial Window
@@ -156,7 +181,7 @@ public:
         w.buffer_idx = 0;
         windows.push_back(w);
 
-        set_info_msg("Welcome! [Alt-s] Split H | [Alt-v] Split V | [J/K] Multi-Cursor | [Alt-q] Quit");
+        set_info_msg("[:] Command Mode | [v] Visual | [Ctrl-v] Block Mode | [Alt-s/v] Split | [Alt-q] Quit");
     }
 
     ~VimEngine() {
@@ -177,33 +202,40 @@ public:
                 continue;
             }
 
-            // Global Quit Command: Alt-q / Alt-Q
+            // Global Quit: Alt-q
             if (ni.alt && (ni.id == 'q' || ni.id == 'Q')) {
                 break;
             }
-            // Window management shortcuts
-            if (ni.alt && (ni.id == 's' || ni.id == 'S')) {
-                split_window(SplitType::HORIZONTAL);
-                continue;
-            }
-            if (ni.alt && (ni.id == 'v' || ni.id == 'V')) {
-                split_window(SplitType::VERTICAL);
-                continue;
-            }
-            if (ni.alt && (ni.id == 'x' || ni.id == 'X')) {
-                close_active_window();
-                continue;
-            }
-            if (key == '\t' || (ni.alt && (ni.id == 'w' || ni.id == 'W'))) {
-                active_win_idx = (active_win_idx + 1) % windows.size();
-                set_info_msg("Focused Window #" + std::to_string(windows[active_win_idx].id));
-                continue;
+
+            // Window management shortcuts in non-command modes
+            if (mode != Mode::COMMAND) {
+                if (ni.alt && (ni.id == 's' || ni.id == 'S')) {
+                    split_window(SplitType::HORIZONTAL);
+                    continue;
+                }
+                if (ni.alt && (ni.id == 'v' || ni.id == 'V')) {
+                    split_window(SplitType::VERTICAL);
+                    continue;
+                }
+                if (ni.alt && (ni.id == 'x' || ni.id == 'X')) {
+                    close_active_window();
+                    continue;
+                }
+                if (key == '\t' || (ni.alt && (ni.id == 'w' || ni.id == 'W'))) {
+                    active_win_idx = (active_win_idx + 1) % windows.size();
+                    set_info_msg("Focused Window #" + std::to_string(windows[active_win_idx].id));
+                    continue;
+                }
             }
 
             if (mode == Mode::NORMAL) {
                 handle_normal_mode(ni, key);
             } else if (mode == Mode::INSERT) {
                 handle_insert_mode(ni, key);
+            } else if (mode == Mode::VISUAL || mode == Mode::VISUAL_BLOCK) {
+                handle_visual_mode(ni, key);
+            } else if (mode == Mode::COMMAND) {
+                handle_command_mode(ni, key);
             }
         }
     }
@@ -221,6 +253,7 @@ private:
     size_t active_win_idx{0};
 
     std::string info_msg;
+    std::string cmd_buffer;
     int next_win_id{2};
 
     const int LINE_NUM_W = 4;
@@ -267,7 +300,7 @@ private:
         unsigned int screen_h, screen_w;
         ncplane_dim_yx(stdplane, &screen_h, &screen_w);
 
-        int edit_h = std::max(1, static_cast<int>(screen_h) - 2); // 2 rows for Status + Info msg
+        int edit_h = std::max(1, static_cast<int>(screen_h) - 2);
         int edit_w = static_cast<int>(screen_w);
         int n = static_cast<int>(windows.size());
 
@@ -340,9 +373,39 @@ private:
         auto& win = active_win();
         auto& buf = active_buf();
 
+        // Ctrl-V -> Visual Block mode
+        if (key == 22 || (ni.ctrl && (ni.id == 'v' || ni.id == 'V'))) {
+            mode = Mode::VISUAL_BLOCK;
+            win.visual_anchor = win.cursors.front();
+            win.cursors = {win.cursors.front()};
+            set_info_msg("-- VISUAL BLOCK --");
+            return;
+        }
+
+        // Helix style: Alt-k adds cursor above
+        if (ni.alt && (ni.id == 'k' || ni.id == 'K')) {
+            Cursor primary = win.cursors.front();
+            if (primary.y - 1 >= 0) {
+                win.cursors.insert(win.cursors.begin(), {primary.y - 1, primary.x});
+                win.clamp_all_cursors(buf, mode);
+                set_info_msg("Multi-Cursor: Added cursor above [Alt-k]. Total: " + std::to_string(win.cursors.size()));
+            }
+            return;
+        }
+
         if (handle_navigation(ni, key)) return;
 
         switch (key) {
+            case ':':
+                mode = Mode::COMMAND;
+                cmd_buffer = "";
+                break;
+            case 'v':
+                mode = Mode::VISUAL;
+                win.visual_anchor = win.cursors.front();
+                win.cursors = {win.cursors.front()};
+                set_info_msg("-- VISUAL --");
+                break;
             case 'h':
                 for (auto& c : win.cursors) c.x = std::max(0, c.x - 1);
                 break;
@@ -365,26 +428,17 @@ private:
                 for (auto& c : win.cursors) c.x = win.get_max_x(buf, c.y, mode);
                 break;
 
-            // Multi-Cursor Adders
-            case 'J': { // Add cursor on line below
+            // Multi-Cursor Adders (Helix style)
+            case 'C': {
                 Cursor primary = win.cursors.back();
                 if (primary.y + 1 < static_cast<int>(buf.lines.size())) {
                     win.cursors.push_back({primary.y + 1, primary.x});
                     win.clamp_all_cursors(buf, mode);
-                    set_info_msg("Multi-Cursor: Added cursor below. Total: " + std::to_string(win.cursors.size()));
+                    set_info_msg("Multi-Cursor: Added cursor below [C]. Total: " + std::to_string(win.cursors.size()));
                 }
                 break;
             }
-            case 'K': { // Add cursor on line above
-                Cursor primary = win.cursors.front();
-                if (primary.y - 1 >= 0) {
-                    win.cursors.insert(win.cursors.begin(), {primary.y - 1, primary.x});
-                    win.clamp_all_cursors(buf, mode);
-                    set_info_msg("Multi-Cursor: Added cursor above. Total: " + std::to_string(win.cursors.size()));
-                }
-                break;
-            }
-            case NCKEY_ESC: // Collapse back to single cursor
+            case NCKEY_ESC:
                 if (win.cursors.size() > 1) {
                     win.cursors = {win.cursors.front()};
                     set_info_msg("Multi-Cursor: Reset to single primary cursor.");
@@ -392,12 +446,12 @@ private:
                 break;
 
             // Multi-Buffer Switching
-            case 'b': // Next buffer
+            case 'b':
                 win.buffer_idx = (win.buffer_idx + 1) % buffers.size();
                 win.clamp_all_cursors(active_buf(), mode);
                 set_info_msg("Switched to Buffer [" + active_buf().name + "]");
                 break;
-            case 'B': // Prev buffer
+            case 'B':
                 win.buffer_idx = (win.buffer_idx + buffers.size() - 1) % buffers.size();
                 win.clamp_all_cursors(active_buf(), mode);
                 set_info_msg("Switched to Buffer [" + active_buf().name + "]");
@@ -445,6 +499,217 @@ private:
         }
     }
 
+    void handle_visual_mode(const ncinput& ni, uint32_t key) {
+        auto& win = active_win();
+        auto& buf = active_buf();
+
+        if (key == NCKEY_ESC) {
+            mode = Mode::NORMAL;
+            win.clamp_all_cursors(buf, mode);
+            set_info_msg("");
+            return;
+        }
+
+        if (handle_navigation(ni, key)) return;
+
+        switch (key) {
+            case 'h':
+                for (auto& c : win.cursors) c.x = std::max(0, c.x - 1);
+                break;
+            case 'l':
+                for (auto& c : win.cursors) c.x = std::min(win.get_max_x(buf, c.y, mode), c.x + 1);
+                break;
+            case 'k':
+                for (auto& c : win.cursors) c.y = std::max(0, c.y - 1);
+                win.clamp_all_cursors(buf, mode);
+                break;
+            case 'j':
+                for (auto& c : win.cursors) c.y = std::min(static_cast<int>(buf.lines.size()) - 1, c.y + 1);
+                win.clamp_all_cursors(buf, mode);
+                break;
+            case '0':
+            case '^':
+                for (auto& c : win.cursors) c.x = 0;
+                break;
+            case '$':
+                for (auto& c : win.cursors) c.x = win.get_max_x(buf, c.y, mode);
+                break;
+
+            // Visual Block Insert Operations: 'I' (insert at left of block), 'A' (append at right)
+            case 'I': {
+                if (mode == Mode::VISUAL_BLOCK) {
+                    buf.push_undo(win.cursors);
+                    Cursor primary = win.cursors.front();
+                    int min_y = std::min(win.visual_anchor.y, primary.y);
+                    int max_y = std::max(win.visual_anchor.y, primary.y);
+                    int min_x = std::min(win.visual_anchor.x, primary.x);
+
+                    win.cursors.clear();
+                    for (int y = min_y; y <= max_y; ++y) {
+                        win.cursors.push_back({y, std::min(min_x, static_cast<int>(buf.lines[y].size()))});
+                    }
+                    mode = Mode::INSERT;
+                    set_info_msg("-- INSERT (MULTI-CURSOR BLOCK) --");
+                }
+                break;
+            }
+            case 'A': {
+                if (mode == Mode::VISUAL_BLOCK) {
+                    buf.push_undo(win.cursors);
+                    Cursor primary = win.cursors.front();
+                    int min_y = std::min(win.visual_anchor.y, primary.y);
+                    int max_y = std::max(win.visual_anchor.y, primary.y);
+                    int max_x = std::max(win.visual_anchor.x, primary.x) + 1;
+
+                    win.cursors.clear();
+                    for (int y = min_y; y <= max_y; ++y) {
+                        win.cursors.push_back({y, std::min(max_x, static_cast<int>(buf.lines[y].size()))});
+                    }
+                    mode = Mode::INSERT;
+                    set_info_msg("-- INSERT (MULTI-CURSOR BLOCK) --");
+                }
+                break;
+            }
+
+            // Delete / Cut Selection
+            case 'd':
+            case 'x': {
+                buf.push_undo(win.cursors);
+                Cursor primary = win.cursors.front();
+                if (mode == Mode::VISUAL_BLOCK) {
+                    int min_y = std::min(win.visual_anchor.y, primary.y);
+                    int max_y = std::max(win.visual_anchor.y, primary.y);
+                    int min_x = std::min(win.visual_anchor.x, primary.x);
+                    int max_x = std::max(win.visual_anchor.x, primary.x);
+
+                    for (int y = min_y; y <= max_y; ++y) {
+                        if (y >= static_cast<int>(buf.lines.size())) continue;
+                        std::string& l = buf.lines[y];
+                        if (min_x < static_cast<int>(l.size())) {
+                            int count = std::min(max_x - min_x + 1, static_cast<int>(l.size()) - min_x);
+                            l.erase(min_x, count);
+                        }
+                    }
+                    win.cursors = {{min_y, min_x}};
+                } else {
+                    Cursor start = std::min(win.visual_anchor, primary);
+                    Cursor end = std::max(win.visual_anchor, primary);
+                    if (start.y == end.y) {
+                        int count = std::min(end.x - start.x + 1, static_cast<int>(buf.lines[start.y].size()) - start.x);
+                        buf.lines[start.y].erase(start.x, count);
+                    } else {
+                        buf.lines[start.y].erase(start.x);
+                        std::string rest = (end.x + 1 < static_cast<int>(buf.lines[end.y].size())) ? buf.lines[end.y].substr(end.x + 1) : "";
+                        buf.lines[start.y] += rest;
+                        buf.lines.erase(buf.lines.begin() + start.y + 1, buf.lines.begin() + end.y + 1);
+                    }
+                    win.cursors = {start};
+                }
+                mode = Mode::NORMAL;
+                win.clamp_all_cursors(buf, mode);
+                set_info_msg("Block deleted.");
+                break;
+            }
+
+            // Yank
+            case 'y': {
+                mode = Mode::NORMAL;
+                set_info_msg("Selection yanked.");
+                break;
+            }
+        }
+    }
+
+    void handle_command_mode(const ncinput& ni, uint32_t key) {
+        if (key == NCKEY_ESC) {
+            mode = Mode::NORMAL;
+            cmd_buffer.clear();
+            set_info_msg("");
+            return;
+        }
+
+        if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
+            execute_command(cmd_buffer);
+            cmd_buffer.clear();
+            mode = Mode::NORMAL;
+            return;
+        }
+
+        if (key == NCKEY_BACKSPACE || key == 127 || key == '\b') {
+            if (!cmd_buffer.empty()) {
+                cmd_buffer.pop_back();
+            } else {
+                mode = Mode::NORMAL;
+            }
+            return;
+        }
+
+        if (key >= 32 && key != NCKEY_ESC) {
+            if (ni.utf8[0] != '\0') {
+                cmd_buffer += reinterpret_cast<const char*>(ni.utf8);
+            } else {
+                cmd_buffer += static_cast<char>(key);
+            }
+        }
+    }
+
+    void execute_command(const std::string& cmd_str) {
+        std::istringstream iss(cmd_str);
+        std::string cmd;
+        iss >> cmd;
+
+        if (cmd.empty()) return;
+
+        if (cmd == "q") {
+            if (active_buf().modified) {
+                set_info_msg("E37: No write since last change (add ! to override)");
+            } else {
+                running = false;
+            }
+        } else if (cmd == "q!") {
+            running = false;
+        } else if (cmd == "w") {
+            std::string path;
+            iss >> path;
+            if (active_buf().save_to_file(path)) {
+                set_info_msg("\"" + active_buf().name + "\" written");
+            } else {
+                set_info_msg("E212: Can't open file for writing");
+            }
+        } else if (cmd == "wq" || cmd == "x") {
+            std::string path;
+            iss >> path;
+            if (active_buf().save_to_file(path)) {
+                running = false;
+            } else {
+                set_info_msg("E212: Can't open file for writing");
+            }
+        } else if (cmd == "sp" || cmd == "split") {
+            split_window(SplitType::HORIZONTAL);
+        } else if (cmd == "vsp" || cmd == "vsplit") {
+            split_window(SplitType::VERTICAL);
+        } else if (cmd == "bn" || cmd == "bnext") {
+            active_win().buffer_idx = (active_win().buffer_idx + 1) % buffers.size();
+            active_win().clamp_all_cursors(active_buf(), mode);
+            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+        } else if (cmd == "bp" || cmd == "bprev") {
+            active_win().buffer_idx = (active_win().buffer_idx + buffers.size() - 1) % buffers.size();
+            active_win().clamp_all_cursors(active_buf(), mode);
+            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+        } else if (cmd == "b") {
+            size_t idx;
+            if (iss >> idx && idx >= 1 && idx <= buffers.size()) {
+                active_win().buffer_idx = idx - 1;
+                active_win().clamp_all_cursors(active_buf(), mode);
+                set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+            } else {
+                set_info_msg("Invalid buffer index (1-" + std::to_string(buffers.size()) + ")");
+            }
+        } else {
+            set_info_msg("E492: Not an editor command: " + cmd);
+        }
+    }
+
     void handle_insert_mode(const ncinput& ni, uint32_t key) {
         auto& win = active_win();
         auto& buf = active_buf();
@@ -454,11 +719,11 @@ private:
         if (key == NCKEY_ESC) {
             mode = Mode::NORMAL;
             win.clamp_all_cursors(buf, mode);
+            set_info_msg("");
             return;
         }
 
         if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
-            // Apply enter across all cursors from bottom to top
             std::sort(win.cursors.begin(), win.cursors.end());
             for (int i = static_cast<int>(win.cursors.size()) - 1; i >= 0; --i) {
                 int cy = win.cursors[i].y;
@@ -469,11 +734,11 @@ private:
                 buf.lines.insert(buf.lines.begin() + cy + 1, rest);
                 win.cursors[i].y++;
                 win.cursors[i].x = 0;
-                // Shift subsequent cursors downward
                 for (size_t j = i + 1; j < win.cursors.size(); ++j) {
                     win.cursors[j].y++;
                 }
             }
+            buf.modified = true;
             win.deduplicate_cursors();
             return;
         }
@@ -486,16 +751,16 @@ private:
                     c.x--;
                 }
             }
+            buf.modified = true;
             win.deduplicate_cursors();
             return;
         }
 
-        // Multi-cursor character typing
+        // Multi-cursor typing
         if (key >= 32 && key != NCKEY_ESC) {
             std::string ins = (ni.utf8[0] != '\0') ? reinterpret_cast<const char*>(ni.utf8) : std::string(1, static_cast<char>(key));
             std::sort(win.cursors.begin(), win.cursors.end());
 
-            // Group cursors by line to adjust column offsets cleanly
             std::map<int, std::vector<size_t>> line_cursor_map;
             for (size_t idx = 0; idx < win.cursors.size(); ++idx) {
                 line_cursor_map[win.cursors[idx].y].push_back(idx);
@@ -515,6 +780,7 @@ private:
                     accumulated_shift += ins.size();
                 }
             }
+            buf.modified = true;
             win.deduplicate_cursors();
         }
     }
@@ -537,26 +803,30 @@ private:
         unsigned int screen_h, screen_w;
         ncplane_dim_yx(stdplane, &screen_h, &screen_w);
 
-        // 1. Render all split windows
+        // 1. Render windows
         for (size_t wi = 0; wi < windows.size(); ++wi) {
             render_window(windows[wi], wi == active_win_idx);
         }
 
-        // 2. Render Single Global Status Bar (Row: screen_h - 2)
+        // 2. Global Status Bar (Row: screen_h - 2)
         render_status_bar(screen_h - 2, screen_w);
 
-        // 3. Render Extra Info/Message Bar (Row: screen_h - 1)
+        // 3. Command Line / Extra Info Bar (Row: screen_h - 1)
         render_info_bar(screen_h - 1, screen_w);
 
-        // 4. Position terminal hardware cursor at primary cursor of active window
-        auto& aw = active_win();
-        if (!aw.cursors.empty()) {
-            Cursor primary = aw.cursors.front();
-            int screen_cy = aw.y + (primary.y - aw.scroll_y);
-            int screen_cx = aw.x + LINE_NUM_W + primary.x;
-            if (screen_cy >= aw.y && screen_cy < aw.y + aw.h &&
-                screen_cx >= aw.x && screen_cx < aw.x + aw.w) {
-                ncplane_cursor_move_yx(stdplane, screen_cy, screen_cx);
+        // 4. Hardware cursor positioning
+        if (mode == Mode::COMMAND) {
+            ncplane_cursor_move_yx(stdplane, screen_h - 1, 1 + cmd_buffer.size());
+        } else {
+            auto& aw = active_win();
+            if (!aw.cursors.empty()) {
+                Cursor primary = aw.cursors.front();
+                int screen_cy = aw.y + (primary.y - aw.scroll_y);
+                int screen_cx = aw.x + LINE_NUM_W + primary.x;
+                if (screen_cy >= aw.y && screen_cy < aw.y + aw.h &&
+                    screen_cx >= aw.x && screen_cx < aw.x + aw.w) {
+                    ncplane_cursor_move_yx(stdplane, screen_cy, screen_cx);
+                }
             }
         }
 
@@ -572,11 +842,17 @@ private:
             cursor_set.insert({c.y, c.x});
         }
 
+        // Visual selection range calculation
+        Cursor primary = win.cursors.empty() ? Cursor{0,0} : win.cursors.front();
+        int v_min_y = std::min(win.visual_anchor.y, primary.y);
+        int v_max_y = std::max(win.visual_anchor.y, primary.y);
+        int v_min_x = std::min(win.visual_anchor.x, primary.x);
+        int v_max_x = std::max(win.visual_anchor.x, primary.x);
+
         for (int r = 0; r < win.h; ++r) {
             int line_idx = win.scroll_y + r;
             int draw_y = win.y + r;
 
-            // Line numbers / Border
             if (is_active) {
                 ncplane_set_fg_rgb8(stdplane, 80, 160, 200);
             } else {
@@ -590,7 +866,6 @@ private:
                 ncplane_putstr_yx(stdplane, draw_y, win.x, "  ~ ");
             }
 
-            // Line content
             int text_avail_w = win.w - LINE_NUM_W;
             if (text_avail_w <= 0) continue;
 
@@ -601,11 +876,30 @@ private:
                     int draw_x = win.x + LINE_NUM_W + c;
 
                     bool has_cursor = cursor_set.count({line_idx, char_idx});
+                    bool in_visual = false;
+
+                    if (is_active) {
+                        if (mode == Mode::VISUAL_BLOCK) {
+                            if (line_idx >= v_min_y && line_idx <= v_max_y &&
+                                char_idx >= v_min_x && char_idx <= v_max_x) {
+                                in_visual = true;
+                            }
+                        } else if (mode == Mode::VISUAL) {
+                            Cursor cur_pt{line_idx, char_idx};
+                            Cursor v_start = std::min(win.visual_anchor, primary);
+                            Cursor v_end = std::max(win.visual_anchor, primary);
+                            if (!(cur_pt < v_start) && !(v_end < cur_pt)) {
+                                in_visual = true;
+                            }
+                        }
+                    }
 
                     if (has_cursor) {
-                        // Multi-cursor highlight (Bright Amber/Orange)
                         ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
-                        ncplane_set_bg_rgb8(stdplane, 255, 180, 50);
+                        ncplane_set_bg_rgb8(stdplane, 255, 180, 50); // Amber
+                    } else if (in_visual) {
+                        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+                        ncplane_set_bg_rgb8(stdplane, 55, 75, 135);  // Visual Blue/Purple
                     } else {
                         ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
                         ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
@@ -614,7 +908,7 @@ private:
                     if (char_idx < static_cast<int>(line.size())) {
                         char ch[2] = {line[char_idx], '\0'};
                         ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
-                    } else if (has_cursor && char_idx == static_cast<int>(line.size())) {
+                    } else if ((has_cursor || in_visual) && char_idx == static_cast<int>(line.size())) {
                         ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
                     } else {
                         ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
@@ -634,31 +928,48 @@ private:
         auto& buf = active_buf();
         Cursor primary = win.cursors.empty() ? Cursor{0, 0} : win.cursors.front();
 
-        // 1. Mode Badge
-        if (mode == Mode::NORMAL) {
-            ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
-            ncplane_set_bg_rgb8(stdplane, 80, 210, 120);
-            ncplane_putstr_yx(stdplane, y, 0, " NORMAL ");
-        } else {
-            ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
-            ncplane_set_bg_rgb8(stdplane, 80, 170, 255);
-            ncplane_putstr_yx(stdplane, y, 0, " INSERT ");
+        // Mode badge styling
+        switch (mode) {
+            case Mode::NORMAL:
+                ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
+                ncplane_set_bg_rgb8(stdplane, 80, 210, 120);
+                ncplane_putstr_yx(stdplane, y, 0, " NORMAL ");
+                break;
+            case Mode::INSERT:
+                ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
+                ncplane_set_bg_rgb8(stdplane, 80, 170, 255);
+                ncplane_putstr_yx(stdplane, y, 0, " INSERT ");
+                break;
+            case Mode::VISUAL:
+                ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
+                ncplane_set_bg_rgb8(stdplane, 230, 140, 60);
+                ncplane_putstr_yx(stdplane, y, 0, " VISUAL ");
+                break;
+            case Mode::VISUAL_BLOCK:
+                ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
+                ncplane_set_bg_rgb8(stdplane, 200, 100, 255);
+                ncplane_putstr_yx(stdplane, y, 0, " V-BLOCK ");
+                break;
+            case Mode::COMMAND:
+                ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
+                ncplane_set_bg_rgb8(stdplane, 240, 200, 80);
+                ncplane_putstr_yx(stdplane, y, 0, " COMMAND ");
+                break;
         }
 
-        // 2. Bar Info
         ncplane_set_fg_rgb8(stdplane, 230, 230, 230);
         ncplane_set_bg_rgb8(stdplane, 40, 44, 52);
 
         char left_info[256];
         snprintf(left_info, sizeof(left_info), " [Win %d/%zu] Buf (%zu/%zu): %s %s",
                  win.id, windows.size(), win.buffer_idx + 1, buffers.size(),
-                 buf.name.c_str(), (!buf.undo_stack.empty() ? "[+]" : ""));
+                 buf.name.c_str(), (buf.modified ? "[+]" : ""));
 
         char right_info[256];
         snprintf(right_info, sizeof(right_info), "Cursors: %zu | Ln %d, Col %d | %zu lines ",
                  win.cursors.size(), primary.y + 1, primary.x + 1, buf.lines.size());
 
-        int badge_w = 8;
+        int badge_w = (mode == Mode::VISUAL_BLOCK || mode == Mode::COMMAND) ? 9 : 8;
         int bar_w = static_cast<int>(screen_w) - badge_w;
         if (bar_w > 0) {
             std::string filler(bar_w, ' ');
@@ -673,16 +984,26 @@ private:
     }
 
     void render_info_bar(int y, unsigned int screen_w) {
-        ncplane_set_fg_rgb8(stdplane, 240, 200, 100);
-        ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
-
-        std::string bar = " " + info_msg;
-        if (static_cast<int>(bar.size()) < static_cast<int>(screen_w)) {
-            bar.append(screen_w - bar.size(), ' ');
+        if (mode == Mode::COMMAND) {
+            ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+            ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
+            std::string prompt = ":" + cmd_buffer;
+            if (static_cast<int>(prompt.size()) < static_cast<int>(screen_w)) {
+                prompt.append(screen_w - prompt.size(), ' ');
+            }
+            ncplane_putstr_yx(stdplane, y, 0, prompt.c_str());
         } else {
-            bar = bar.substr(0, screen_w);
+            ncplane_set_fg_rgb8(stdplane, 240, 200, 100);
+            ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
+
+            std::string bar = " " + info_msg;
+            if (static_cast<int>(bar.size()) < static_cast<int>(screen_w)) {
+                bar.append(screen_w - bar.size(), ' ');
+            } else {
+                bar = bar.substr(0, screen_w);
+            }
+            ncplane_putstr_yx(stdplane, y, 0, bar.c_str());
         }
-        ncplane_putstr_yx(stdplane, y, 0, bar.c_str());
     }
 };
 
