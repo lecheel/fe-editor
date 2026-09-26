@@ -28,11 +28,13 @@ public:
     std::vector<BufferSnapshot> undo_stack;
     std::vector<BufferSnapshot> redo_stack;
     bool modified{false};
+    size_t version{0};
 
     bool is_git_repo{false};
     bool git_tracked{false};
     std::vector<std::string> git_base_lines;
     mutable std::vector<GitHunk> cached_hunks;
+    mutable size_t last_diff_version{static_cast<size_t>(-1)};
     mutable bool hunks_dirty{true};
 
     TextBuffer(std::string name, std::vector<std::string> initial_lines, std::string path = "");

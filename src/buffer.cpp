@@ -226,7 +226,14 @@ void TextBuffer::init_git_status() {
         rel_path = p.filename().string();
     }
 
-    std::string show_cmd = "git -C \"" + root + "\" show \":./" + rel_path + "\" 2>/dev/null";
+    while (rel_path.rfind("./", 0) == 0) {
+        rel_path = rel_path.substr(2);
+    }
+    while (!rel_path.empty() && rel_path.front() == '/') {
+        rel_path = rel_path.substr(1);
+    }
+
+    std::string show_cmd = "git -C \"" + root + "\" show \":" + rel_path + "\" 2>/dev/null";
     fp = popen(show_cmd.c_str(), "r");
     if (fp) {
         std::vector<std::string> glines;
@@ -295,8 +302,9 @@ const std::vector<GitHunk>& TextBuffer::get_hunks() const {
         cached_hunks.clear();
         return cached_hunks;
     }
-    if (hunks_dirty) {
+    if (hunks_dirty || last_diff_version != version) {
         cached_hunks = compute_myers_diff(git_base_lines, lines);
+        last_diff_version = version;
         hunks_dirty = false;
     }
     return cached_hunks;
@@ -306,6 +314,7 @@ void TextBuffer::push_undo(const std::vector<Cursor>& cursors) {
     undo_stack.push_back({lines, cursors});
     redo_stack.clear();
     modified = true;
+    version++;
     invalidate_hunks();
     if (undo_stack.size() > 100) {
         undo_stack.erase(undo_stack.begin());
@@ -320,6 +329,7 @@ bool TextBuffer::undo(std::vector<Cursor>& cursors) {
     lines = state.lines;
     cursors = state.cursors;
     modified = true;
+    version++;
     invalidate_hunks();
     return true;
 }
@@ -332,6 +342,7 @@ bool TextBuffer::redo(std::vector<Cursor>& cursors) {
     lines = state.lines;
     cursors = state.cursors;
     modified = true;
+    version++;
     invalidate_hunks();
     return true;
 }

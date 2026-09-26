@@ -401,6 +401,9 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
                 c.y++;
                 c.x = 0;
             }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
             mode = Mode::INSERT;
             break;
     }
@@ -515,6 +518,9 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
                 }
                 win.cursors = {start};
             }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
             mode = Mode::NORMAL;
             win.clamp_all_cursors(buf, mode);
             set_info_msg("Block deleted.");
@@ -699,6 +705,8 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
             }
         }
         buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
         win.deduplicate_cursors();
         return;
     }
@@ -712,6 +720,8 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
             }
         }
         buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
         win.deduplicate_cursors();
         return;
     }
@@ -740,6 +750,7 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
             }
         }
         buf.modified = true;
+        buf.version++;
         buf.invalidate_hunks();
         win.deduplicate_cursors();
     }
@@ -1411,9 +1422,19 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
              display_name.c_str(), (buf.modified ? "[+]" : ""));
 
     char right_info[256];
-    snprintf(right_info, sizeof(right_info), "Cursors: %zu | Ln %d, Col %d | %zu lines ",
-             win.cursors.size(), primary.y + 1, primary.x + 1, buf.lines.size());
-
+    if (buf.is_git_repo) {
+        int add_cnt = 0, mod_cnt = 0, del_cnt = 0;
+        for (const auto& h : buf.get_hunks()) {
+            if (h.type == HunkType::ADDED) add_cnt += h.cur_count;
+            else if (h.type == HunkType::MODIFIED) mod_cnt += h.cur_count;
+            else if (h.type == HunkType::DELETED) del_cnt += h.orig_count;
+        }
+        snprintf(right_info, sizeof(right_info), "Git: +%d ~%d -%d | Cursors: %zu | Ln %d, Col %d | %zu lines ",
+                 add_cnt, mod_cnt, del_cnt, win.cursors.size(), primary.y + 1, primary.x + 1, buf.lines.size());
+    } else {
+        snprintf(right_info, sizeof(right_info), "Cursors: %zu | Ln %d, Col %d | %zu lines ",
+                 win.cursors.size(), primary.y + 1, primary.x + 1, buf.lines.size());
+    }
     int badge_w = (mode == Mode::VISUAL_BLOCK || mode == Mode::COMMAND) ? 9 : 8;
     int bar_w = static_cast<int>(screen_w) - badge_w;
     if (bar_w > 0) {
