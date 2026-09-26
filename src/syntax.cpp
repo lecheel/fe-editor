@@ -161,11 +161,11 @@ std::string find_query_file(const std::string& lang) {
         "queries/" + lang + "/highlights.scm",
     };
     if (home) {
-        candidates.push_back(std::string(home) + "/.config/helix/runtime/queries/" + lang + "/highlights.scm");
-        candidates.push_back(std::string(home) + "/.local/share/helix/runtime/queries/" + lang + "/highlights.scm");
+        candidates.push_back(std::string(home) + "/.config/fe/runtime/queries/" + lang + "/highlights.scm");
+        candidates.push_back(std::string(home) + "/.local/share/fe/runtime/queries/" + lang + "/highlights.scm");
     }
-    candidates.push_back("/usr/lib/helix/runtime/queries/" + lang + "/highlights.scm");
-    candidates.push_back("/usr/share/helix/runtime/queries/" + lang + "/highlights.scm");
+    candidates.push_back("/usr/lib/fe/runtime/queries/" + lang + "/highlights.scm");
+    candidates.push_back("/usr/share/fe/runtime/queries/" + lang + "/highlights.scm");
 
     for (const auto& path : candidates) {
         if (fs::exists(path)) return path;
@@ -181,11 +181,11 @@ void* load_lang_parser(const std::string& lang) {
         "./grammars/" + lang + ".so"
     };
     if (home) {
-        candidates.push_back(std::string(home) + "/.config/helix/runtime/grammars/" + lang + ".so");
-        candidates.push_back(std::string(home) + "/.local/share/helix/runtime/grammars/" + lang + ".so");
+        candidates.push_back(std::string(home) + "/.config/fe/runtime/grammars/" + lang + ".so");
+        candidates.push_back(std::string(home) + "/.local/share/fe/runtime/grammars/" + lang + ".so");
     }
-    candidates.push_back("/usr/lib/helix/runtime/grammars/" + lang + ".so");
-    candidates.push_back("/usr/local/lib/helix/runtime/grammars/" + lang + ".so");
+    candidates.push_back("/usr/lib/fe/runtime/grammars/" + lang + ".so");
+    candidates.push_back("/usr/local/lib/fe/runtime/grammars/" + lang + ".so");
 
     for (const auto& path : candidates) {
         void* handle = dlopen(path.c_str(), RTLD_LAZY);
