@@ -41,6 +41,13 @@ private:
     bool show_whichkey_popup{false};
     std::chrono::steady_clock::time_point leader_start_time;
 
+    bool show_filepicker{false};
+    std::string filepicker_query;
+    std::vector<std::string> filepicker_all_files;
+    std::vector<std::string> filepicker_filtered_files;
+    int filepicker_selected_idx{0};
+    int filepicker_scroll{0};
+
     std::string project_dir;
     std::string project_name;
 
@@ -59,6 +66,12 @@ private:
     void revert_active_hunk();
     void handle_git_hunk_popup(const ncinput& ni, uint32_t key);
     void render_git_hunk_popup(unsigned int screen_h, unsigned int screen_w);
+
+    void open_filepicker();
+    void scan_project_files();
+    void filter_filepicker_files();
+    void handle_filepicker_input(const ncinput& ni, uint32_t key);
+    void render_filepicker(unsigned int screen_h, unsigned int screen_w);
 
     void handle_whichkey_popup(const ncinput& ni, uint32_t key);
     void render_whichkey_popup(unsigned int screen_h, unsigned int screen_w);

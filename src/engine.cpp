@@ -117,7 +117,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     restore_window_position(w, *buffers[0]);
     windows.push_back(w);
 
-    set_info_msg("[Space] Leader | [F2/F3] Hunks | [F4] Diff | [F9] Settings | [:] Cmd | [v] Visual");
+    set_info_msg("[Space] Leader | [Alt-e] Files | [F2/F3] Hunks | [F4] Diff | [F9] Settings");
 }
 
 int VimEngine::get_line_num_w(const TextBuffer& buf) const {
@@ -949,6 +949,262 @@ void VimEngine::handle_git_hunk_popup(const ncinput& ni, uint32_t key) {
     }
 }
 
+void VimEngine::open_filepicker() {
+    show_whichkey_popup = false;
+    show_git_hunk_popup = false;
+    show_settings_popup = false;
+    leader_pending = false;
+
+    filepicker_query.clear();
+    filepicker_selected_idx = 0;
+    filepicker_scroll = 0;
+    scan_project_files();
+    filter_filepicker_files();
+    show_filepicker = true;
+    set_info_msg("FilePicker: Type to filter, [Enter] open, [Esc] close");
+}
+
+void VimEngine::scan_project_files() {
+    filepicker_all_files.clear();
+    std::string root = !project_dir.empty() ? project_dir : ".";
+
+    std::error_code ec;
+    auto iter = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+    auto end_iter = fs::recursive_directory_iterator();
+
+    for (; iter != end_iter && !ec; iter.increment(ec)) {
+        if (filepicker_all_files.size() >= 2500) break; // prevent lag on huge trees
+
+        const auto& path = iter->path();
+        std::string fn = path.filename().string();
+
+        if (iter->is_directory(ec)) {
+            if (fn.front() == '.' || fn == "node_modules" || fn == "build" ||
+                fn == "target" || fn == "bin" || fn == "obj" || fn == "dist") {
+                iter.disable_recursion_pending();
+            }
+            continue;
+        }
+
+        if (iter->is_regular_file(ec)) {
+            if (fn.front() == '.') continue;
+            std::string rel;
+            try {
+                rel = fs::relative(path, root, ec).string();
+            } catch (...) {
+                rel = fn;
+            }
+            if (!ec && !rel.empty()) {
+                filepicker_all_files.push_back(rel);
+            }
+        }
+    }
+    std::sort(filepicker_all_files.begin(), filepicker_all_files.end());
+}
+
+void VimEngine::filter_filepicker_files() {
+    filepicker_filtered_files.clear();
+    if (filepicker_query.empty()) {
+        filepicker_filtered_files = filepicker_all_files;
+    } else {
+        std::string q = filepicker_query;
+        std::transform(q.begin(), q.end(), q.begin(), [](unsigned char c) { return std::tolower(c); });
+
+        for (const auto& f : filepicker_all_files) {
+            std::string lf = f;
+            std::transform(lf.begin(), lf.end(), lf.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (lf.find(q) != std::string::npos) {
+                filepicker_filtered_files.push_back(f);
+            }
+        }
+    }
+
+    if (filepicker_selected_idx >= static_cast<int>(filepicker_filtered_files.size())) {
+        filepicker_selected_idx = std::max(0, static_cast<int>(filepicker_filtered_files.size()) - 1);
+    }
+}
+
+void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
+    if (key == NCKEY_ESC) {
+        show_filepicker = false;
+        set_info_msg("");
+        return;
+    }
+
+    if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
+        if (!filepicker_filtered_files.empty() &&
+            filepicker_selected_idx >= 0 &&
+            filepicker_selected_idx < static_cast<int>(filepicker_filtered_files.size())) {
+
+            std::string rel_path = filepicker_filtered_files[filepicker_selected_idx];
+            std::string full_path = (fs::path(!project_dir.empty() ? project_dir : ".") / rel_path).lexically_normal().string();
+
+            save_window_position(active_win(), active_buf());
+
+            size_t found_idx = buffers.size();
+            for (size_t i = 0; i < buffers.size(); ++i) {
+                if (buffers[i]->file_path == full_path || buffers[i]->name == rel_path || buffers[i]->file_path == rel_path) {
+                    found_idx = i;
+                    break;
+                }
+            }
+
+            if (found_idx == buffers.size()) {
+                buffers.push_back(TextBuffer::from_file(full_path));
+                found_idx = buffers.size() - 1;
+            }
+
+            active_win().buffer_idx = found_idx;
+            restore_window_position(active_win(), active_buf());
+            show_filepicker = false;
+            set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
+        }
+        return;
+    }
+
+    if (key == NCKEY_UP || (ni.ctrl && (key == 'p' || key == 'P' || key == 'k' || key == 'K'))) {
+        if (filepicker_selected_idx > 0) {
+            filepicker_selected_idx--;
+        } else if (!filepicker_filtered_files.empty()) {
+            filepicker_selected_idx = static_cast<int>(filepicker_filtered_files.size()) - 1;
+        }
+        return;
+    }
+
+    if (key == NCKEY_DOWN || (ni.ctrl && (key == 'n' || key == 'N' || key == 'j' || key == 'J'))) {
+        if (filepicker_selected_idx + 1 < static_cast<int>(filepicker_filtered_files.size())) {
+            filepicker_selected_idx++;
+        } else {
+            filepicker_selected_idx = 0;
+        }
+        return;
+    }
+
+    if (key == NCKEY_BACKSPACE || key == 127 || key == '\b') {
+        if (!filepicker_query.empty()) {
+            filepicker_query.pop_back();
+            filter_filepicker_files();
+        }
+        return;
+    }
+
+    if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
+        filepicker_query += static_cast<char>(key);
+        filter_filepicker_files();
+        return;
+    }
+}
+
+void VimEngine::render_filepicker(unsigned int screen_h, unsigned int screen_w) {
+    int popup_w = std::max(48, static_cast<int>(screen_w * 0.65));
+    popup_w = std::min(popup_w, static_cast<int>(screen_w) - 4);
+    int popup_h = 15;
+    popup_h = std::min(popup_h, static_cast<int>(screen_h) - 4);
+
+    int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
+    int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
+
+    // Draw background
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    // Draw rounded box
+    ncplane_set_fg_rgb8(stdplane, 80, 180, 240);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+    ncplane_putstr_yx(stdplane, popup_y + 2, popup_x, "├");
+    ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + popup_w - 1, "┤");
+
+    // Title & count
+    std::string title = " File Finder (Alt-e / Space-f) ";
+    ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    std::string count_str = " (" + std::to_string(filepicker_filtered_files.size()) + "/" +
+                            std::to_string(filepicker_all_files.size()) + ") ";
+    if (popup_w - static_cast<int>(count_str.size()) - 3 > popup_x + static_cast<int>(title.size()) + 2) {
+        ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - static_cast<int>(count_str.size()) - 2, count_str.c_str());
+    }
+
+    // Search query prompt
+    ncplane_set_fg_rgb8(stdplane, 80, 220, 120);
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "> ");
+    ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+    std::string q_display = filepicker_query + "_";
+    int max_q_w = popup_w - 6;
+    if (static_cast<int>(q_display.size()) > max_q_w) {
+        q_display = q_display.substr(q_display.size() - max_q_w);
+    }
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 4, q_display.c_str());
+
+    // File list
+    int visible_rows = popup_h - 4;
+    if (filepicker_selected_idx < filepicker_scroll) {
+        filepicker_scroll = filepicker_selected_idx;
+    }
+    if (filepicker_selected_idx >= filepicker_scroll + visible_rows) {
+        filepicker_scroll = filepicker_selected_idx - visible_rows + 1;
+    }
+
+    for (int r = 0; r < visible_rows; ++r) {
+        int idx = filepicker_scroll + r;
+        int draw_y = popup_y + 3 + r;
+
+        if (idx < static_cast<int>(filepicker_filtered_files.size())) {
+            bool is_sel = (idx == filepicker_selected_idx);
+            if (is_sel) {
+                ncplane_set_bg_rgb8(stdplane, 45, 65, 115);
+                ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+            } else {
+                ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+                ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
+            }
+
+            // Fill row background
+            for (int c = 1; c < popup_w - 1; ++c) {
+                ncplane_putchar_yx(stdplane, draw_y, popup_x + c, ' ');
+            }
+
+            std::string prefix = is_sel ? " ▶ " : "   ";
+            if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 205, 60);
+            ncplane_putstr_yx(stdplane, draw_y, popup_x + 2, prefix.c_str());
+
+            if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+            else ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
+
+            std::string fn = filepicker_filtered_files[idx];
+            int max_len = popup_w - 7;
+            if (static_cast<int>(fn.size()) > max_len) {
+                fn = "..." + fn.substr(fn.size() - max_len + 3);
+            }
+            ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, fn.c_str());
+        }
+    }
+
+    // Footer
+    std::string footer = " [▲/▼] Navigate  [Enter] Open  [Esc] Cancel ";
+    ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
+}
+
 void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
@@ -962,6 +1218,9 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
     }
 
     switch (key) {
+        case 'f':
+            open_filepicker();
+            break;
         case 'w':
             if (buf.save_to_file("")) {
                 save_window_position(win, buf);
@@ -1046,10 +1305,10 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
     };
 
     std::vector<WkItem> col1 = {
+        {"f", "File Picker"},
         {"w", "Save Buffer"},
         {"s", "Split Horiz"},
         {"v", "Split Vert"},
-        {"c", "Close Window"},
         {"b", "Next Buffer"},
         {"u", "Undo"}
     };
@@ -1297,6 +1556,9 @@ void VimEngine::render() {
 
     if (show_settings_popup) {
         render_settings_popup(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
+    } else if (show_filepicker) {
+        render_filepicker(screen_h, screen_w);
         notcurses_cursor_disable(nc);
     } else if (show_git_hunk_popup) {
         render_git_hunk_popup(screen_h, screen_w);
@@ -1814,8 +2076,18 @@ void VimEngine::run() {
         LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
              key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
 
+        if (show_filepicker) {
+            handle_filepicker_input(ni, key);
+            continue;
+        }
+
         if (leader_pending) {
             handle_whichkey_popup(ni, key);
+            continue;
+        }
+
+        if (ni.alt && (ni.id == 'e' || ni.id == 'E')) {
+            open_filepicker();
             continue;
         }
 
