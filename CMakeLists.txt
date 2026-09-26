@@ -14,6 +14,10 @@ add_executable(fe
     src/config.cpp
     src/diff.cpp
     src/engine.cpp
+    src/engine_edit.cpp
+    src/engine_ui.cpp
+    src/engine_render.cpp
+    src/engine_search.cpp
     src/git.cpp
     src/log.cpp
     src/syntax.cpp
