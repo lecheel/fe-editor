@@ -222,6 +222,22 @@ void TextBuffer::init_git_status() {
     if (root.empty()) return;
     is_git_repo = true;
 
+    std::string b_cmd = "git -C \"" + root + "\" rev-parse --abbrev-ref HEAD 2>/dev/null";
+    FILE* b_fp = popen(b_cmd.c_str(), "r");
+    if (b_fp) {
+        char b_buf[256];
+        if (fgets(b_buf, sizeof(b_buf), b_fp)) {
+            git_branch = b_buf;
+            while (!git_branch.empty() && (git_branch.back() == '\n' || git_branch.back() == '\r')) {
+                git_branch.pop_back();
+            }
+        }
+        pclose(b_fp);
+    }
+    if (git_branch.empty() || git_branch == "HEAD") {
+        git_branch = "git";
+    }
+
     std::string rel_path;
     try {
         rel_path = fs::relative(p, fs::path(root)).string();

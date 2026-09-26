@@ -1631,84 +1631,114 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
     auto& buf = active_buf();
     Cursor primary = win.cursors.empty() ? Cursor{0, 0} : win.cursors.front();
 
+    // Clear entire status line background
+    ncplane_set_bg_rgb8(stdplane, 22, 24, 30);
+    for (unsigned int c = 0; c < screen_w; ++c) {
+        ncplane_putchar_yx(stdplane, y, c, ' ');
+    }
+
+    int cur_x = 0;
+
+    // --- Left Segment 1: [mode] ---
+    std::string mode_str = " NORMAL ";
+    uint8_t m_r = 80, m_g = 210, m_b = 120;
     switch (mode) {
         case Mode::NORMAL:
-            ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
-            ncplane_set_bg_rgb8(stdplane, 80, 210, 120);
-            ncplane_putstr_yx(stdplane, y, 0, " NORMAL ");
+            mode_str = " NORMAL ";
+            m_r = 80; m_g = 210; m_b = 120;
             break;
         case Mode::INSERT:
-            ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
-            ncplane_set_bg_rgb8(stdplane, 80, 170, 255);
-            ncplane_putstr_yx(stdplane, y, 0, " INSERT ");
+            mode_str = " INSERT ";
+            m_r = 80; m_g = 170; m_b = 255;
             break;
         case Mode::VISUAL:
-            ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
-            ncplane_set_bg_rgb8(stdplane, 230, 140, 60);
-            ncplane_putstr_yx(stdplane, y, 0, " VISUAL ");
+            mode_str = " VISUAL ";
+            m_r = 230; m_g = 140; m_b = 60;
             break;
         case Mode::VISUAL_BLOCK:
-            ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
-            ncplane_set_bg_rgb8(stdplane, 200, 100, 255);
-            ncplane_putstr_yx(stdplane, y, 0, " V-BLOCK ");
+            mode_str = " V-BLOCK ";
+            m_r = 200; m_g = 100; m_b = 255;
             break;
         case Mode::COMMAND:
-            ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
-            ncplane_set_bg_rgb8(stdplane, 240, 200, 80);
-            ncplane_putstr_yx(stdplane, y, 0, " COMMAND ");
+            mode_str = " COMMAND ";
+            m_r = 240; m_g = 200; m_b = 80;
             break;
     }
+    ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
+    ncplane_set_bg_rgb8(stdplane, m_r, m_g, m_b);
+    ncplane_putstr_yx(stdplane, y, cur_x, mode_str.c_str());
+    cur_x += static_cast<int>(mode_str.size());
 
-    ncplane_set_fg_rgb8(stdplane, 230, 230, 230);
-    ncplane_set_bg_rgb8(stdplane, 40, 44, 52);
-
-    std::string display_name = buf.name;
-    if (!buf.file_path.empty() && !project_dir.empty()) {
-        try {
-            std::error_code ec;
-            fs::path p = fs::absolute(buf.file_path, ec);
-            fs::path root = fs::absolute(project_dir, ec);
-            auto rel = fs::relative(p, root, ec);
-            if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0) {
-                display_name = rel.string();
-            }
-        } catch (...) {}
-    }
-
-    char left_info[256];
-    std::string lang_tag = (buf.syntax && !buf.syntax->get_language().empty()) ? ("[" + buf.syntax->get_language() + "] ") : "";
-    snprintf(left_info, sizeof(left_info), " [%s] %s[Win %d/%zu] Buf (%zu/%zu): %s %s",
-             project_name.c_str(), lang_tag.c_str(), win.id, windows.size(), win.buffer_idx + 1, buffers.size(),
-             display_name.c_str(), (buf.modified ? "[+]" : ""));
-
-    char right_info[256];
-    if (buf.is_git_repo) {
+    // --- Left Segment 2: [branch name +0 ~0 -0] ---
+    if (buf.is_git_repo && cur_x < static_cast<int>(screen_w)) {
         int add_cnt = 0, mod_cnt = 0, del_cnt = 0;
         for (const auto& h : buf.get_hunks()) {
             if (h.type == HunkType::ADDED) add_cnt += h.cur_count;
             else if (h.type == HunkType::MODIFIED) mod_cnt += h.cur_count;
             else if (h.type == HunkType::DELETED) del_cnt += h.orig_count;
         }
-        snprintf(right_info, sizeof(right_info), "Git: +%d ~%d -%d | Cursors: %zu | Ln %d, Col %d | %zu lines ",
-                 add_cnt, mod_cnt, del_cnt, win.cursors.size(), primary.y + 1, primary.x + 1, buf.lines.size());
-    } else {
-        snprintf(right_info, sizeof(right_info), "Cursors: %zu | Ln %d, Col %d | %zu lines ",
-                 win.cursors.size(), primary.y + 1, primary.x + 1, buf.lines.size());
-    }
-    int badge_w = (mode == Mode::VISUAL_BLOCK || mode == Mode::COMMAND) ? 9 : 8;
-    int bar_w = static_cast<int>(screen_w) - badge_w;
-    if (bar_w > 0) {
-        std::string filler(bar_w, ' ');
-        ncplane_putstr_yx(stdplane, y, badge_w, filler.c_str());
-        ncplane_putstr_yx(stdplane, y, badge_w, left_info);
 
-        int right_len = static_cast<int>(std::string(right_info).size());
-        int right_x = std::max(badge_w + static_cast<int>(std::string(left_info).size()),
-                               static_cast<int>(screen_w) - right_len);
-        ncplane_putstr_yx(stdplane, y, right_x, right_info);
+        std::string branch_name = !buf.git_branch.empty() ? buf.git_branch : "git";
+        std::string git_seg = "  " + branch_name + " +" + std::to_string(add_cnt) +
+                              " ~" + std::to_string(mod_cnt) + " -" + std::to_string(del_cnt) + " ";
+
+        ncplane_set_fg_rgb8(stdplane, 225, 230, 240);
+        ncplane_set_bg_rgb8(stdplane, 45, 52, 68);
+        ncplane_putstr_yx(stdplane, y, cur_x, git_seg.c_str());
+        cur_x += static_cast<int>(git_seg.size()) - 2;
+
+    }
+
+    // --- Left Segment 3: [filename] ---
+    if (cur_x < static_cast<int>(screen_w)) {
+        std::string display_name = buf.name;
+        if (!buf.file_path.empty() && !project_dir.empty()) {
+            try {
+                std::error_code ec;
+                fs::path p = fs::absolute(buf.file_path, ec);
+                fs::path root = fs::absolute(project_dir, ec);
+                auto rel = fs::relative(p, root, ec);
+                if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0) {
+                    display_name = rel.string();
+                }
+            } catch (...) {}
+        }
+
+        std::string file_seg = " " + display_name + (buf.modified ? " [+] " : " ");
+        ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
+        ncplane_set_bg_rgb8(stdplane, 32, 36, 46);
+        ncplane_putstr_yx(stdplane, y, cur_x, file_seg.c_str());
+        cur_x += static_cast<int>(file_seg.size());
+    }
+
+    // --- Right Segments: [filetype][row:col][buffer 1/2] ---
+    std::string ft = (buf.syntax && !buf.syntax->get_language().empty()) ? buf.syntax->get_language() : "text";
+    std::string ft_seg = " " + ft + " ";
+    std::string pos_seg = " " + std::to_string(primary.y + 1) + ":" + std::to_string(primary.x + 1) + " ";
+    std::string buf_seg = " " + std::to_string(win.buffer_idx + 1) + "/" + std::to_string(buffers.size()) + " ";
+
+    int right_total_w = static_cast<int>(ft_seg.size() + pos_seg.size() + buf_seg.size());
+    int rx = std::max(cur_x, static_cast<int>(screen_w) - right_total_w);
+
+    if (rx < static_cast<int>(screen_w)) {
+        // [filetype]
+        ncplane_set_fg_rgb8(stdplane, 130, 200, 255);
+        ncplane_set_bg_rgb8(stdplane, 40, 45, 58);
+        ncplane_putstr_yx(stdplane, y, rx, ft_seg.c_str());
+        rx += static_cast<int>(ft_seg.size());
+
+        // [row:col]
+        ncplane_set_fg_rgb8(stdplane, 240, 245, 255);
+        ncplane_set_bg_rgb8(stdplane, 52, 60, 75);
+        ncplane_putstr_yx(stdplane, y, rx, pos_seg.c_str());
+        rx += static_cast<int>(pos_seg.size());
+
+        // [buffer 1/2]
+        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        ncplane_set_bg_rgb8(stdplane, 68, 78, 98);
+        ncplane_putstr_yx(stdplane, y, rx, buf_seg.c_str());
     }
 }
-
 void VimEngine::render_info_bar(int y, unsigned int screen_w) {
     // Clear line background cleanly without overflowing the terminal corner
     ncplane_set_bg_rgb8(stdplane, 20, 20, 24);

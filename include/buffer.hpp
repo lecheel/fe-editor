@@ -33,6 +33,7 @@ public:
 
     bool is_git_repo{false};
     bool git_tracked{false};
+    std::string git_branch;
     std::vector<std::string> git_base_lines;
     mutable std::vector<GitHunk> cached_hunks;
     mutable size_t last_diff_version{static_cast<size_t>(-1)};
