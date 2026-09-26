@@ -1,8 +1,29 @@
 #include "buffer.hpp"
 #include <fstream>
+#include <memory>
 
 TextBuffer::TextBuffer(std::string name, std::vector<std::string> initial_lines, std::string path)
     : name(std::move(name)), file_path(std::move(path)), lines(std::move(initial_lines)) {}
+
+std::shared_ptr<TextBuffer> TextBuffer::from_file(const std::string& path) {
+    std::vector<std::string> loaded_lines;
+    std::ifstream in(path);
+    if (in.is_open()) {
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            loaded_lines.push_back(line);
+        }
+        if (loaded_lines.empty()) {
+            loaded_lines.push_back("");
+        }
+    } else {
+        loaded_lines.push_back("");
+    }
+    return std::make_shared<TextBuffer>(path, loaded_lines, path);
+}
 
 void TextBuffer::push_undo(const std::vector<Cursor>& cursors) {
     undo_stack.push_back({lines, cursors});

@@ -11,6 +11,7 @@ pkg_check_modules(NOTCURSES REQUIRED IMPORTED_TARGET notcurses notcurses-core)
 add_executable(fe
     main.cpp
     src/buffer.cpp
+    src/config.cpp
     src/engine.cpp
     src/log.cpp
 )

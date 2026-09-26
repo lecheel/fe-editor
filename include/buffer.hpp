@@ -1,5 +1,6 @@
 #pragma once
 #include "types.hpp"
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,7 @@ public:
     bool modified{false};
 
     TextBuffer(std::string name, std::vector<std::string> initial_lines, std::string path = "");
+    static std::shared_ptr<TextBuffer> from_file(const std::string& path);
 
     void push_undo(const std::vector<Cursor>& cursors);
     bool undo(std::vector<Cursor>& cursors);

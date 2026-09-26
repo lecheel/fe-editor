@@ -7,10 +7,12 @@
 #include <set>
 #include <algorithm>
 
-VimEngine::VimEngine(bool verbose) {
+VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     Log::init(verbose, "fe_debug.log");
     LOGD("VimEngine constructing, verbose=%d", verbose);
     setlocale(LC_ALL, "");
+
+    config.load();
 
     notcurses_options opts = {};
     opts.flags = NCOPTION_SUPPRESS_BANNERS;
@@ -20,45 +22,82 @@ VimEngine::VimEngine(bool verbose) {
     }
     stdplane = notcurses_stdplane(nc);
 
-    buffers.push_back(std::make_shared<TextBuffer>("buffer-1.cpp", std::vector<std::string>{
-        "// --- Buffer 1: Modular Multi-Window, Visual Block & Command Engine ---",
-        "#include <iostream>",
-        "",
-        "void demo() {",
-        "    int a = 100;",
-        "    int b = 200;",
-        "    int c = 300;",
-        "    std::cout << \"Modular architecture initialized!\" << std::endl;",
-        "}",
-        "",
-        "// Visual Block: [Ctrl-v] start block, [I]/[A] multi-cursor insert, [d]/[x] delete block",
-        "// Commands:     [:] enter command mode (:w, :q, :wq, :q!, :sp, :vsp, :b <n>)",
-        "// Navigation:   h/j/k/l, Arrows, PgUp, PgDown, Home, End",
-        "// Multi-Cursor: [C] Add below, [Alt-k] Add above, [Esc] Normal/Reset",
-        "// Splits:       [Alt-s] Horiz split, [Alt-v] Vert split, [Tab] Cycle win, [Alt-x] Close"
-    }));
+    if (!files.empty()) {
+        for (const auto& path : files) {
+            buffers.push_back(TextBuffer::from_file(path));
+        }
+    } else {
+        buffers.push_back(std::make_shared<TextBuffer>("buffer-1.cpp", std::vector<std::string>{
+            "// --- Buffer 1: Modular Multi-Window, Visual Block & Command Engine ---",
+            "#include <iostream>",
+            "",
+            "void demo() {",
+            "    int a = 100;",
+            "    int b = 200;",
+            "    int c = 300;",
+            "    std::cout << \"Modular architecture initialized!\" << std::endl;",
+            "}",
+            "",
+            "// Visual Block: [Ctrl-v] start block, [I]/[A] multi-cursor insert, [d]/[x] delete block",
+            "// Commands:     [:] enter command mode (:w, :q, :wq, :q!, :sp, :vsp, :b <n>)",
+            "// Navigation:   h/j/k/l, Arrows, PgUp, PgDown, Home, End",
+            "// Multi-Cursor: [C] Add below, [Alt-k] Add above, [Esc] Normal/Reset",
+            "// Splits:       [Alt-s] Horiz split, [Alt-v] Vert split, [Tab] Cycle win, [Alt-x] Close"
+        }));
 
-    buffers.push_back(std::make_shared<TextBuffer>("buffer-2.md", std::vector<std::string>{
-        "# Documentation & Notes",
-        "",
-        "- Modular design: Buffer, Window, Engine, Types separated.",
-        "- Visual Mode: 'v' character visual, 'Ctrl-v' block visual.",
-        "- In Block Mode: press 'I' to insert across all lines.",
-        "- Command Mode: ':w [file]', ':q', ':wq', ':q!'."
-    }));
+        buffers.push_back(std::make_shared<TextBuffer>("buffer-2.md", std::vector<std::string>{
+            "# Documentation & Notes",
+            "",
+            "- Modular design: Buffer, Window, Engine, Types separated.",
+            "- Visual Mode: 'v' character visual, 'Ctrl-v' block visual.",
+            "- In Block Mode: press 'I' to insert across all lines.",
+            "- Command Mode: ':w [file]', ':q', ':wq', ':q!'."
+        }));
+    }
 
     Window w;
     w.id = 1;
     w.buffer_idx = 0;
+    restore_window_position(w, *buffers[0]);
     windows.push_back(w);
 
     set_info_msg("[:] Command Mode | [v] Visual | [Ctrl-v] Block Mode | [Alt-s/v] Split | [Alt-q] Quit");
 }
 
 VimEngine::~VimEngine() {
+    save_all_positions();
+    config.save();
     LOGD("VimEngine shutting down");
     if (nc) notcurses_stop(nc);
     Log::shutdown();
+}
+
+void VimEngine::save_window_position(const Window& win, const TextBuffer& buf) {
+    if (win.cursors.empty()) return;
+    Cursor primary = win.cursors.front();
+    std::string key = !buf.file_path.empty() ? buf.file_path : buf.name;
+    config.set_position(key, primary.y, primary.x, win.scroll_y);
+}
+
+void VimEngine::restore_window_position(Window& win, const TextBuffer& buf) {
+    std::string key = !buf.file_path.empty() ? buf.file_path : buf.name;
+    FilePosition pos;
+    if (config.get_position(key, pos)) {
+        win.cursors = {{pos.y, pos.x}};
+        win.scroll_y = pos.scroll_y;
+    } else {
+        win.cursors = {{0, 0}};
+        win.scroll_y = 0;
+    }
+    win.clamp_all_cursors(buf, mode);
+}
+
+void VimEngine::save_all_positions() {
+    for (const auto& win : windows) {
+        if (win.buffer_idx < buffers.size()) {
+            save_window_position(win, *buffers[win.buffer_idx]);
+        }
+    }
 }
 
 void VimEngine::set_info_msg(std::string msg) {
@@ -251,13 +290,15 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
             }
             break;
         case 'b':
+            save_window_position(win, active_buf());
             win.buffer_idx = (win.buffer_idx + 1) % buffers.size();
-            win.clamp_all_cursors(active_buf(), mode);
+            restore_window_position(win, active_buf());
             set_info_msg("Switched to Buffer [" + active_buf().name + "]");
             break;
         case 'B':
+            save_window_position(win, active_buf());
             win.buffer_idx = (win.buffer_idx + buffers.size() - 1) % buffers.size();
-            win.clamp_all_cursors(active_buf(), mode);
+            restore_window_position(win, active_buf());
             set_info_msg("Switched to Buffer [" + active_buf().name + "]");
             break;
         case 'u':
@@ -468,14 +509,20 @@ void VimEngine::execute_command(const std::string& cmd_str) {
         if (active_buf().modified) {
             set_info_msg("E37: No write since last change (add ! to override)");
         } else {
+            save_all_positions();
+            config.save();
             running = false;
         }
     } else if (cmd == "q!") {
+        save_all_positions();
+        config.save();
         running = false;
     } else if (cmd == "w") {
         std::string path;
         iss >> path;
         if (active_buf().save_to_file(path)) {
+            save_window_position(active_win(), active_buf());
+            config.save();
             set_info_msg("\"" + active_buf().name + "\" written");
         } else {
             set_info_msg("E212: Can't open file for writing");
@@ -484,27 +531,54 @@ void VimEngine::execute_command(const std::string& cmd_str) {
         std::string path;
         iss >> path;
         if (active_buf().save_to_file(path)) {
+            save_all_positions();
+            config.save();
             running = false;
         } else {
             set_info_msg("E212: Can't open file for writing");
+        }
+    } else if (cmd == "e" || cmd == "edit") {
+        std::string path;
+        iss >> path;
+        if (!path.empty()) {
+            save_window_position(active_win(), active_buf());
+            size_t found_idx = buffers.size();
+            for (size_t i = 0; i < buffers.size(); ++i) {
+                if (buffers[i]->file_path == path || buffers[i]->name == path) {
+                    found_idx = i;
+                    break;
+                }
+            }
+            if (found_idx == buffers.size()) {
+                buffers.push_back(TextBuffer::from_file(path));
+                found_idx = buffers.size() - 1;
+            }
+            active_win().buffer_idx = found_idx;
+            restore_window_position(active_win(), active_buf());
+            set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
+        } else {
+            set_info_msg("E471: Argument required");
         }
     } else if (cmd == "sp" || cmd == "split") {
         split_window(SplitType::HORIZONTAL);
     } else if (cmd == "vsp" || cmd == "vsplit") {
         split_window(SplitType::VERTICAL);
     } else if (cmd == "bn" || cmd == "bnext") {
+        save_window_position(active_win(), active_buf());
         active_win().buffer_idx = (active_win().buffer_idx + 1) % buffers.size();
-        active_win().clamp_all_cursors(active_buf(), mode);
+        restore_window_position(active_win(), active_buf());
         set_info_msg("Switched to Buffer [" + active_buf().name + "]");
     } else if (cmd == "bp" || cmd == "bprev") {
+        save_window_position(active_win(), active_buf());
         active_win().buffer_idx = (active_win().buffer_idx + buffers.size() - 1) % buffers.size();
-        active_win().clamp_all_cursors(active_buf(), mode);
+        restore_window_position(active_win(), active_buf());
         set_info_msg("Switched to Buffer [" + active_buf().name + "]");
     } else if (cmd == "b") {
         size_t idx;
         if (iss >> idx && idx >= 1 && idx <= buffers.size()) {
+            save_window_position(active_win(), active_buf());
             active_win().buffer_idx = idx - 1;
-            active_win().clamp_all_cursors(active_buf(), mode);
+            restore_window_position(active_win(), active_buf());
             set_info_msg("Switched to Buffer [" + active_buf().name + "]");
         } else {
             set_info_msg("Invalid buffer index (1-" + std::to_string(buffers.size()) + ")");

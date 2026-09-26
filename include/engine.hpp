@@ -1,6 +1,7 @@
 #pragma once
 #include "types.hpp"
 #include "buffer.hpp"
+#include "config.hpp"
 #include "window.hpp"
 #include <notcurses/notcurses.h>
 #include <memory>
@@ -9,7 +10,7 @@
 
 class VimEngine {
 public:
-    explicit VimEngine(bool verbose = false);
+    explicit VimEngine(bool verbose = false, const std::vector<std::string>& files = {});
     ~VimEngine();
 
     void run();
@@ -32,9 +33,15 @@ private:
 
     static constexpr int LINE_NUM_W = 4;
 
+    ConfigManager config;
+
     void set_info_msg(std::string msg);
     Window& active_win();
     TextBuffer& active_buf();
+
+    void save_window_position(const Window& win, const TextBuffer& buf);
+    void restore_window_position(Window& win, const TextBuffer& buf);
+    void save_all_positions();
 
     void split_window(SplitType type);
     void close_active_window();
