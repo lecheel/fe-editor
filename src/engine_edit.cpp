@@ -25,6 +25,180 @@ REGISTER_COMMAND(
     }
 );
 
+namespace {
+
+enum class DotCommand {
+    NONE,
+    DD,
+    DW,
+    D_CARET,
+    D_TOP,
+    D_END,
+    D_DOLLAR
+};
+
+DotCommand s_last_dot_cmd = DotCommand::NONE;
+bool s_d_pending = false;
+
+int compute_dw_end(const std::string& line, int cx) {
+    int len = static_cast<int>(line.size());
+    if (cx >= len) return cx;
+    auto is_word = [](char ch) {
+        return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+    };
+    auto is_space = [](char ch) {
+        return std::isspace(static_cast<unsigned char>(ch));
+    };
+
+    int p = cx;
+    if (is_word(line[p])) {
+        while (p < len && is_word(line[p])) p++;
+        while (p < len && is_space(line[p])) p++;
+    } else if (is_space(line[p])) {
+        while (p < len && is_space(line[p])) p++;
+    } else {
+        while (p < len && !is_word(line[p]) && !is_space(line[p])) p++;
+        while (p < len && is_space(line[p])) p++;
+    }
+    return p;
+}
+
+void execute_dot_command(VimEngine& engine, DotCommand cmd, bool is_repeat) {
+    auto& win = engine.active_win();
+    auto& buf = engine.active_buf();
+
+    if (cmd == DotCommand::DD) {
+        buf.push_undo(win.cursors);
+        std::set<int> lines_to_delete;
+        for (const auto& c : win.cursors) {
+            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                lines_to_delete.insert(c.y);
+            }
+        }
+        std::vector<int> sorted_lines(lines_to_delete.rbegin(), lines_to_delete.rend());
+        for (int y : sorted_lines) {
+            if (buf.lines.size() > 1) {
+                buf.lines.erase(buf.lines.begin() + y);
+            } else {
+                buf.lines[0] = "";
+            }
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.clamp_all_cursors(buf, Mode::NORMAL);
+        win.deduplicate_cursors();
+        engine.update_window_scroll(win, buf);
+        if (!is_repeat) s_last_dot_cmd = DotCommand::DD;
+        engine.set_info_msg(is_repeat ? "Repeated: dd" : "Deleted line (dd)");
+    } else if (cmd == DotCommand::DW) {
+        buf.push_undo(win.cursors);
+        std::sort(win.cursors.begin(), win.cursors.end());
+        for (auto& c : win.cursors) {
+            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                std::string& line = buf.lines[c.y];
+                int end_x = compute_dw_end(line, c.x);
+                if (end_x > c.x) {
+                    line.erase(c.x, end_x - c.x);
+                }
+            }
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.clamp_all_cursors(buf, Mode::NORMAL);
+        win.deduplicate_cursors();
+        engine.update_window_scroll(win, buf);
+        if (!is_repeat) s_last_dot_cmd = DotCommand::DW;
+        engine.set_info_msg(is_repeat ? "Repeated: dw" : "Deleted word (dw)");
+    } else if (cmd == DotCommand::D_CARET) {
+        buf.push_undo(win.cursors);
+        std::sort(win.cursors.begin(), win.cursors.end());
+        for (auto& c : win.cursors) {
+            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                std::string& line = buf.lines[c.y];
+                if (c.x > 0) {
+                    int del_count = std::min(c.x, static_cast<int>(line.size()));
+                    line.erase(0, del_count);
+                    c.x = 0;
+                }
+            }
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.clamp_all_cursors(buf, Mode::NORMAL);
+        win.deduplicate_cursors();
+        engine.update_window_scroll(win, buf);
+        if (!is_repeat) s_last_dot_cmd = DotCommand::D_CARET;
+        engine.set_info_msg(is_repeat ? "Repeated: d^" : "Deleted to line start (d^)");
+    } else if (cmd == DotCommand::D_TOP) {
+        buf.push_undo(win.cursors);
+        int target_y = win.cursors.empty() ? 0 : win.cursors.front().y;
+        target_y = std::clamp(target_y, 0, static_cast<int>(buf.lines.size()) - 1);
+        buf.lines.erase(buf.lines.begin(), buf.lines.begin() + target_y + 1);
+        if (buf.lines.empty()) {
+            buf.lines.push_back("");
+        }
+        win.cursors = {{0, 0}};
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.clamp_all_cursors(buf, Mode::NORMAL);
+        win.deduplicate_cursors();
+        engine.update_window_scroll(win, buf);
+        if (!is_repeat) s_last_dot_cmd = DotCommand::D_TOP;
+        engine.set_info_msg(is_repeat ? "Repeated: d0" : "Deleted to top of file (d0)");
+    } else if (cmd == DotCommand::D_END) {
+        buf.push_undo(win.cursors);
+        int target_y = win.cursors.empty() ? 0 : win.cursors.front().y;
+        target_y = std::clamp(target_y, 0, static_cast<int>(buf.lines.size()) - 1);
+        buf.lines.erase(buf.lines.begin() + target_y, buf.lines.end());
+        if (buf.lines.empty()) {
+            buf.lines.push_back("");
+            win.cursors = {{0, 0}};
+        } else {
+            int new_y = std::min(target_y, static_cast<int>(buf.lines.size()) - 1);
+            win.cursors = {{new_y, 0}};
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.clamp_all_cursors(buf, Mode::NORMAL);
+        win.deduplicate_cursors();
+        engine.update_window_scroll(win, buf);
+        if (!is_repeat) s_last_dot_cmd = DotCommand::D_END;
+        engine.set_info_msg(is_repeat ? "Repeated: dG" : "Deleted to end of file (dG)");
+    } else if (cmd == DotCommand::D_DOLLAR) {
+        buf.push_undo(win.cursors);
+        std::sort(win.cursors.begin(), win.cursors.end());
+        for (auto& c : win.cursors) {
+            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                std::string& line = buf.lines[c.y];
+                if (c.x < static_cast<int>(line.size())) {
+                    line.erase(c.x);
+                }
+            }
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.clamp_all_cursors(buf, Mode::NORMAL);
+        win.deduplicate_cursors();
+        engine.update_window_scroll(win, buf);
+        if (!is_repeat) s_last_dot_cmd = DotCommand::D_DOLLAR;
+        engine.set_info_msg(is_repeat ? "Repeated: d$" : "Deleted to line end (d$)");
+    }
+}
+
+} // namespace
+
 bool VimEngine::handle_navigation(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
@@ -67,6 +241,32 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
     AutocompleteState::instance().reset();
     auto& win = active_win();
     auto& buf = active_buf();
+
+    if (s_d_pending) {
+        s_d_pending = false;
+        if (key == 'd') {
+            execute_dot_command(*this, DotCommand::DD, false);
+            return;
+        } else if (key == 'w') {
+            execute_dot_command(*this, DotCommand::DW, false);
+            return;
+        } else if (key == '^' || (ni.shift && (key == '6' || ni.id == '6'))) {
+            execute_dot_command(*this, DotCommand::D_CARET, false);
+            return;
+        } else if (key == '0') {
+            execute_dot_command(*this, DotCommand::D_TOP, false);
+            return;
+        } else if (key == 'G' || ni.id == 'G' || key == 'g' || (ni.shift && (key == 'g' || ni.id == 'g'))) {
+            execute_dot_command(*this, DotCommand::D_END, false);
+            return;
+        } else if (key == '$' || (ni.shift && (key == '4' || ni.id == '4'))) {
+            execute_dot_command(*this, DotCommand::D_DOLLAR, false);
+            return;
+        } else {
+            set_info_msg("");
+            if (key == NCKEY_ESC) return;
+        }
+    }
 
     if (key == ' ') {
         leader_pending = true;
@@ -133,6 +333,20 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
             break;
         case '$':
             for (auto& c : win.cursors) c.x = win.get_max_x(buf, c.y, mode);
+            break;
+        case 'd':
+            s_d_pending = true;
+            set_info_msg("d");
+            break;
+        case 'D':
+            execute_dot_command(*this, DotCommand::D_DOLLAR, false);
+            break;
+        case '.':
+            if (s_last_dot_cmd == DotCommand::NONE) {
+                set_info_msg("No previous change to repeat.");
+            } else {
+                execute_dot_command(*this, s_last_dot_cmd, true);
+            }
             break;
         case 'C': {
             Cursor primary = win.cursors.back();
