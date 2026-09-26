@@ -55,6 +55,9 @@ void VimEngine::render() {
     if (show_mini_help) {
         render_mini_help(screen_h, screen_w);
         notcurses_cursor_disable(nc);
+    } else if (show_buffer_list) {
+        render_buffer_list(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
     } else if (show_settings_popup) {
         render_settings_popup(screen_h, screen_w);
         notcurses_cursor_disable(nc);

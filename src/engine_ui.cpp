@@ -242,6 +242,246 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
     draw_slots_row(popup_y + 2, row2);
 }
 
+void VimEngine::next_buffer() {
+    if (buffers.empty()) return;
+    auto& win = active_win();
+    save_window_position(win, active_buf());
+    win.buffer_idx = (win.buffer_idx + 1) % buffers.size();
+    restore_window_position(win, active_buf());
+    set_info_msg("Switched to Buffer [" + std::to_string(win.buffer_idx + 1) + "/" +
+                 std::to_string(buffers.size()) + "]: " + active_buf().name);
+}
+
+void VimEngine::prev_buffer() {
+    if (buffers.empty()) return;
+    auto& win = active_win();
+    save_window_position(win, active_buf());
+    win.buffer_idx = (win.buffer_idx + buffers.size() - 1) % buffers.size();
+    restore_window_position(win, active_buf());
+    set_info_msg("Switched to Buffer [" + std::to_string(win.buffer_idx + 1) + "/" +
+                 std::to_string(buffers.size()) + "]: " + active_buf().name);
+}
+
+void VimEngine::switch_to_buffer(size_t idx) {
+    if (idx >= buffers.size()) return;
+    auto& win = active_win();
+    save_window_position(win, active_buf());
+    win.buffer_idx = idx;
+    restore_window_position(win, active_buf());
+    set_info_msg("Switched to Buffer [" + std::to_string(win.buffer_idx + 1) + "/" +
+                 std::to_string(buffers.size()) + "]: " + active_buf().name);
+}
+
+void VimEngine::open_buffer_list() {
+    show_whichkey_popup = false;
+    show_git_hunk_popup = false;
+    show_settings_popup = false;
+    show_filepicker = false;
+    show_rg_popup = false;
+    close_cmd_completion();
+    leader_pending = false;
+
+    buffer_list_selected_idx = static_cast<int>(active_win().buffer_idx);
+    if (buffer_list_selected_idx >= static_cast<int>(buffers.size())) {
+        buffer_list_selected_idx = 0;
+    }
+    show_buffer_list = true;
+    set_info_msg("Buffer List: [j/k/▲/▼] Navigate, [Enter] Switch, [d/x] Close buffer, [Esc] Close");
+}
+
+void VimEngine::handle_buffer_list_input(const ncinput& ni, uint32_t key) {
+    if (key == NCKEY_ESC || key == 'q' || key == 'Q' ||
+        (ni.alt && (ni.id == 'b' || ni.id == 'B'))) {
+        show_buffer_list = false;
+        set_info_msg("");
+        return;
+    }
+
+    if (buffers.empty()) {
+        show_buffer_list = false;
+        return;
+    }
+
+    int total = static_cast<int>(buffers.size());
+
+    if (key == NCKEY_DOWN || key == 'j' || key == 'J' ||
+        key == '\t' || key == '+' || key == '=' || key == ']' ||
+        (ni.ctrl && (key == 'n' || key == 'N' || key == 'j' || key == 'J'))) {
+        buffer_list_selected_idx = (buffer_list_selected_idx + 1) % total;
+        return;
+    }
+
+    if (key == NCKEY_UP || key == 'k' || key == 'K' ||
+        key == '-' || key == '_' || key == '[' ||
+        (ni.shift && (key == '\t' || key == NCKEY_TAB)) ||
+        (ni.ctrl && (key == 'p' || key == 'P' || key == 'k' || key == 'K'))) {
+        buffer_list_selected_idx = (buffer_list_selected_idx + total - 1) % total;
+        return;
+    }
+
+    if (key >= '1' && key <= '9') {
+        int target = key - '1';
+        if (target < total) {
+            show_buffer_list = false;
+            switch_to_buffer(target);
+            return;
+        }
+    }
+
+    if (key == NCKEY_ENTER || key == '\n' || key == '\r' || key == ' ') {
+        show_buffer_list = false;
+        switch_to_buffer(buffer_list_selected_idx);
+        return;
+    }
+
+    if (key == 'd' || key == 'x') {
+        if (buffers.size() <= 1) {
+            set_info_msg("Cannot close the last remaining buffer.");
+            return;
+        }
+        size_t to_remove = static_cast<size_t>(buffer_list_selected_idx);
+        std::string name = buffers[to_remove]->name;
+        buffers.erase(buffers.begin() + to_remove);
+        for (auto& w : windows) {
+            if (w.buffer_idx == to_remove) {
+                w.buffer_idx = (to_remove > 0) ? to_remove - 1 : 0;
+                restore_window_position(w, *buffers[w.buffer_idx]);
+            } else if (w.buffer_idx > to_remove) {
+                w.buffer_idx--;
+            }
+        }
+        if (buffer_list_selected_idx >= static_cast<int>(buffers.size())) {
+            buffer_list_selected_idx = static_cast<int>(buffers.size()) - 1;
+        }
+        set_info_msg("Closed buffer: " + name);
+        return;
+    }
+}
+
+void VimEngine::render_buffer_list(unsigned int screen_h, unsigned int screen_w) {
+    int total = static_cast<int>(buffers.size());
+    int visible_rows = std::min(total, 12);
+    int popup_h = visible_rows + 4;
+    popup_h = std::min(popup_h, static_cast<int>(screen_h) - 4);
+    int popup_w = std::max(56, static_cast<int>(screen_w * 0.60));
+    popup_w = std::min(popup_w, static_cast<int>(screen_w) - 4);
+
+    int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
+    int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
+
+    // Background
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    // Border (roundbox)
+    ncplane_set_fg_rgb8(stdplane, 70, 195, 210);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+
+    // Title
+    std::string title = " Buffer List (Alt-b / :ls) ";
+    ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    std::string count_str = " (" + std::to_string(total) + " buffers) ";
+    if (popup_w - static_cast<int>(count_str.size()) - 3 > popup_x + static_cast<int>(title.size()) + 2) {
+        ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - static_cast<int>(count_str.size()) - 2, count_str.c_str());
+    }
+
+    int list_start_y = popup_y + 2;
+    int max_list_rows = popup_h - 3;
+    int scroll_offset = 0;
+    if (buffer_list_selected_idx >= max_list_rows) {
+        scroll_offset = buffer_list_selected_idx - max_list_rows + 1;
+    }
+
+    for (int r = 0; r < max_list_rows && (r + scroll_offset) < total; ++r) {
+        int idx = r + scroll_offset;
+        int draw_y = list_start_y + r;
+        bool is_sel = (idx == buffer_list_selected_idx);
+        bool is_active_win = (static_cast<size_t>(idx) == active_win().buffer_idx);
+        const auto& b = *buffers[idx];
+
+        if (is_sel) {
+            ncplane_set_bg_rgb8(stdplane, 45, 65, 115);
+        } else {
+            ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+        }
+
+        for (int c = 1; c < popup_w - 1; ++c) {
+            ncplane_putchar_yx(stdplane, draw_y, popup_x + c, ' ');
+        }
+
+        // Pointer
+        int cur_x = popup_x + 2;
+        if (is_sel) {
+            ncplane_set_fg_rgb8(stdplane, 255, 205, 60);
+            ncplane_putstr_yx(stdplane, draw_y, cur_x, "▶ ");
+        } else {
+            ncplane_putstr_yx(stdplane, draw_y, cur_x, "  ");
+        }
+        cur_x += 2;
+
+        // Buffer index
+        char num_buf[16];
+        snprintf(num_buf, sizeof(num_buf), "[%d]%c ", idx + 1, is_active_win ? '*' : ' ');
+        if (is_active_win) {
+            ncplane_set_fg_rgb8(stdplane, 80, 220, 120);
+        } else {
+            ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+        }
+        ncplane_putstr_yx(stdplane, draw_y, cur_x, num_buf);
+        cur_x += static_cast<int>(std::string(num_buf).size());
+
+        // Name
+        if (is_sel) {
+            ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        } else {
+            ncplane_set_fg_rgb8(stdplane, 215, 220, 230);
+        }
+        std::string disp_name = b.name;
+        if (b.modified) {
+            disp_name += " [+]";
+        }
+        int max_name_w = popup_w - 28;
+        if (static_cast<int>(disp_name.size()) > max_name_w && max_name_w > 0) {
+            disp_name = ".." + disp_name.substr(disp_name.size() - (max_name_w - 2));
+        }
+        ncplane_putstr_yx(stdplane, draw_y, cur_x, disp_name.c_str());
+
+        // Right side info (lines & lang)
+        std::string lang = (b.syntax && !b.syntax->get_language().empty()) ? b.syntax->get_language() : "text";
+        std::string right_info = std::to_string(b.lines.size()) + "L | " + lang;
+        int rx = popup_x + popup_w - static_cast<int>(right_info.size()) - 3;
+        if (rx > cur_x + static_cast<int>(disp_name.size()) + 2) {
+            ncplane_set_fg_rgb8(stdplane, 140, 150, 175);
+            ncplane_putstr_yx(stdplane, draw_y, rx, right_info.c_str());
+        }
+    }
+
+    // Footer actions
+    std::string footer = " [▲/▼/j/k] Navigate  [Enter] Switch  [d] Close  [Esc] Cancel ";
+    ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
+}
+
 void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
@@ -306,16 +546,10 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
             close_active_window();
             break;
         case 'b':
-            save_window_position(win, buf);
-            win.buffer_idx = (win.buffer_idx + 1) % buffers.size();
-            restore_window_position(win, active_buf());
-            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+            next_buffer();
             break;
         case 'B':
-            save_window_position(win, buf);
-            win.buffer_idx = (win.buffer_idx + buffers.size() - 1) % buffers.size();
-            restore_window_position(win, active_buf());
-            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+            prev_buffer();
             break;
         case 'h':
             open_git_hunk_popup();

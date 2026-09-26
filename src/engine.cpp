@@ -217,6 +217,9 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   [Space] w       Save buffer",
             "//   [Space] q       Quit (or :q / :q!)",
             "//   [Space] s / v   Split horizontal / vertical",
+            "//   [Alt-b]         Buffer list popup (or :ls / :buffers)",
+            "//   [Alt--] / [:bp] Switch to previous buffer",
+            "//   [Alt-=] / [:bn] Switch to next buffer",
             "//   [Space] b / B   Cycle next / previous buffer",
             "//   [Space] h       Git hunk diff popup (F4)",
             "//   [Space] j / k   Jump next / prev git hunk (F3 / F2)",
@@ -549,6 +552,11 @@ void VimEngine::run() {
             continue;
         }
 
+        if (show_buffer_list) {
+            handle_buffer_list_input(ni, key);
+            continue;
+        }
+
         if (show_rg_popup) {
             handle_rg_popup_input(ni, key);
             continue;
@@ -613,6 +621,18 @@ void VimEngine::run() {
         }
 
         if (mode != Mode::COMMAND) {
+            if (ni.alt && (ni.id == 'b' || ni.id == 'B')) {
+                open_buffer_list();
+                continue;
+            }
+            if (ni.alt && (ni.id == '-' || key == '-' || ni.id == '_' || key == '_')) {
+                prev_buffer();
+                continue;
+            }
+            if (ni.alt && (ni.id == '=' || key == '=' || ni.id == '+' || key == '+')) {
+                next_buffer();
+                continue;
+            }
             if (ni.alt && (ni.id == 's' || ni.id == 'S')) {
                 split_window(SplitType::HORIZONTAL);
                 continue;

@@ -365,16 +365,10 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
             }
             break;
         case 'b':
-            save_window_position(win, active_buf());
-            win.buffer_idx = (win.buffer_idx + 1) % buffers.size();
-            restore_window_position(win, active_buf());
-            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+            next_buffer();
             break;
         case 'B':
-            save_window_position(win, active_buf());
-            win.buffer_idx = (win.buffer_idx + buffers.size() - 1) % buffers.size();
-            restore_window_position(win, active_buf());
-            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+            prev_buffer();
             break;
         case 'u':
             if (buf.undo(win.cursors)) {
@@ -1026,25 +1020,18 @@ void VimEngine::execute_command(const std::string& cmd_str) {
     } else if (cmd == "vsp" || cmd == "vsplit") {
         split_window(SplitType::VERTICAL);
     } else if (cmd == "bn" || cmd == "bnext") {
-        save_window_position(active_win(), active_buf());
-        active_win().buffer_idx = (active_win().buffer_idx + 1) % buffers.size();
-        restore_window_position(active_win(), active_buf());
-        set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+        next_buffer();
     } else if (cmd == "bp" || cmd == "bprev") {
-        save_window_position(active_win(), active_buf());
-        active_win().buffer_idx = (active_win().buffer_idx + buffers.size() - 1) % buffers.size();
-        restore_window_position(active_win(), active_buf());
-        set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+        prev_buffer();
     } else if (cmd == "b") {
         size_t idx;
         if (iss >> idx && idx >= 1 && idx <= buffers.size()) {
-            save_window_position(active_win(), active_buf());
-            active_win().buffer_idx = idx - 1;
-            restore_window_position(active_win(), active_buf());
-            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+            switch_to_buffer(idx - 1);
         } else {
-            set_info_msg("Invalid buffer index (1-" + std::to_string(buffers.size()) + ")");
+            open_buffer_list();
         }
+    } else if (cmd == "ls" || cmd == "buffers") {
+        open_buffer_list();
     } else if (cmd == "vg" || cmd == "vimgrep" || cmd == "rg") {
         std::string pattern;
         std::string word;

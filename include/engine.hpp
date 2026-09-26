@@ -51,6 +51,10 @@ private:
     int cmd_completion_selected_idx{0};
     int cmd_completion_scroll_row{0};
 
+    // Buffer list popup state
+    bool show_buffer_list{false};
+    int buffer_list_selected_idx{0};
+
     bool show_mini_help{false};
     bool show_filepicker{false};
     std::string filepicker_query;
@@ -127,6 +131,13 @@ public:
     void apply_rg_replace();
     void handle_rg_popup_input(const ncinput& ni, uint32_t key);
     void render_rg_popup(unsigned int screen_h, unsigned int screen_w);
+
+    void next_buffer();
+    void prev_buffer();
+    void switch_to_buffer(size_t idx);
+    void open_buffer_list();
+    void handle_buffer_list_input(const ncinput& ni, uint32_t key);
+    void render_buffer_list(unsigned int screen_h, unsigned int screen_w);
 
     void handle_whichkey_popup(const ncinput& ni, uint32_t key);
     void render_whichkey_popup(unsigned int screen_h, unsigned int screen_w);
