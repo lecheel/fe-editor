@@ -1,4 +1,5 @@
 #include "engine.hpp"
+#include "log.hpp"
 #include <clocale>
 #include <iostream>
 #include <sstream>
@@ -6,7 +7,9 @@
 #include <set>
 #include <algorithm>
 
-VimEngine::VimEngine() {
+VimEngine::VimEngine(bool verbose) {
+    Log::init(verbose, "fe_debug.log");
+    LOGD("VimEngine constructing, verbose=%d", verbose);
     setlocale(LC_ALL, "");
 
     notcurses_options opts = {};
@@ -53,7 +56,9 @@ VimEngine::VimEngine() {
 }
 
 VimEngine::~VimEngine() {
+    LOGD("VimEngine shutting down");
     if (nc) notcurses_stop(nc);
+    Log::shutdown();
 }
 
 void VimEngine::set_info_msg(std::string msg) {
@@ -189,13 +194,20 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
+    // Direct Command Mode trigger
+    // Some terminals (Kitty keyboard protocol) report the unshifted key (';')
+    // with shift as a separate modifier flag instead of sending ':' directly.
+    if (key == ':' || ni.id == ':' || (ni.utf8[0] == ':' && ni.utf8[1] == '\0') ||
+        (ni.shift && (key == ';' || ni.id == ';'))) {
+        LOGD("Entering COMMAND mode (key=%u id=%u utf8=%02x %02x shift=%d)", key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.shift);
+        mode = Mode::COMMAND;
+        cmd_buffer.clear();
+        return;
+    }
+
     if (handle_navigation(ni, key)) return;
 
     switch (key) {
-        case ':':
-            mode = Mode::COMMAND;
-            cmd_buffer = "";
-            break;
         case 'v':
             mode = Mode::VISUAL;
             win.visual_anchor = win.cursors.front();
@@ -295,6 +307,13 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
         mode = Mode::NORMAL;
         win.clamp_all_cursors(buf, mode);
         set_info_msg("");
+        return;
+    }
+
+    if (key == ':' || ni.id == ':' || (ni.utf8[0] == ':' && ni.utf8[1] == '\0') ||
+        (ni.shift && (key == ';' || ni.id == ';'))) {
+        mode = Mode::COMMAND;
+        cmd_buffer.clear();
         return;
     }
 
@@ -402,6 +421,8 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
 }
 
 void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
+    LOGD("handle_command_mode key=%u id=%u utf8=%02x %02x cmd_buffer='%s'",
+         key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], cmd_buffer.c_str());
     if (key == NCKEY_ESC) {
         mode = Mode::NORMAL;
         cmd_buffer.clear();
@@ -421,14 +442,16 @@ void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
             cmd_buffer.pop_back();
         } else {
             mode = Mode::NORMAL;
+            set_info_msg("");
         }
         return;
     }
 
-    if (key >= 32 && key != NCKEY_ESC) {
+    // Ignore synthesized non-printable keys (like arrows/F-keys)
+    if (!nckey_synthesized_p(key)) {
         if (ni.utf8[0] != '\0') {
             cmd_buffer += reinterpret_cast<const char*>(ni.utf8);
-        } else {
+        } else if (key >= 32 && key < 127) {
             cmd_buffer += static_cast<char>(key);
         }
     }
@@ -590,8 +613,10 @@ void VimEngine::render() {
     render_status_bar(screen_h - 2, screen_w);
     render_info_bar(screen_h - 1, screen_w);
 
+    // Enable and position hardware terminal cursor
     if (mode == Mode::COMMAND) {
-        ncplane_cursor_move_yx(stdplane, screen_h - 1, 1 + cmd_buffer.size());
+        int cursor_x = std::min(static_cast<int>(screen_w) - 1, 1 + static_cast<int>(cmd_buffer.size()));
+        notcurses_cursor_enable(nc, screen_h - 1, cursor_x);
     } else {
         auto& aw = active_win();
         if (!aw.cursors.empty()) {
@@ -600,7 +625,9 @@ void VimEngine::render() {
             int screen_cx = aw.x + LINE_NUM_W + primary.x;
             if (screen_cy >= aw.y && screen_cy < aw.y + aw.h &&
                 screen_cx >= aw.x && screen_cx < aw.x + aw.w) {
-                ncplane_cursor_move_yx(stdplane, screen_cy, screen_cx);
+                notcurses_cursor_enable(nc, screen_cy, screen_cx);
+            } else {
+                notcurses_cursor_disable(nc);
             }
         }
     }
@@ -757,25 +784,34 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
 }
 
 void VimEngine::render_info_bar(int y, unsigned int screen_w) {
+    // Clear line background cleanly without overflowing the terminal corner
+    ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
+    for (unsigned int x = 0; x < screen_w; ++x) {
+        ncplane_putchar_yx(stdplane, y, x, ' ');
+    }
+
     if (mode == Mode::COMMAND) {
-        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        // Distinct bright yellow ':' prompt
+        ncplane_set_fg_rgb8(stdplane, 255, 230, 80);
         ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
-        std::string prompt = ":" + cmd_buffer;
-        if (static_cast<int>(prompt.size()) < static_cast<int>(screen_w)) {
-            prompt.append(screen_w - prompt.size(), ' ');
+        ncplane_putstr_yx(stdplane, y, 0, ":");
+
+        // Command text typed by user
+        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        if (!cmd_buffer.empty()) {
+            ncplane_putstr_yx(stdplane, y, 1, cmd_buffer.c_str());
         }
-        ncplane_putstr_yx(stdplane, y, 0, prompt.c_str());
     } else {
         ncplane_set_fg_rgb8(stdplane, 240, 200, 100);
         ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
 
-        std::string bar = " " + info_msg;
-        if (static_cast<int>(bar.size()) < static_cast<int>(screen_w)) {
-            bar.append(screen_w - bar.size(), ' ');
-        } else {
-            bar = bar.substr(0, screen_w);
+        if (!info_msg.empty()) {
+            std::string bar = " " + info_msg;
+            if (static_cast<int>(bar.size()) >= static_cast<int>(screen_w)) {
+                bar = bar.substr(0, screen_w - 1);
+            }
+            ncplane_putstr_yx(stdplane, y, 0, bar.c_str());
         }
-        ncplane_putstr_yx(stdplane, y, 0, bar.c_str());
     }
 }
 
@@ -793,6 +829,8 @@ void VimEngine::run() {
             continue;
         }
 
+    LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
+         key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
         if (ni.alt && (ni.id == 'q' || ni.id == 'Q')) {
             break;
         }

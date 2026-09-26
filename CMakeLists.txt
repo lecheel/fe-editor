@@ -12,6 +12,7 @@ add_executable(fe
     main.cpp
     src/buffer.cpp
     src/engine.cpp
+    src/log.cpp
 )
 
 target_include_directories(fe PRIVATE include)

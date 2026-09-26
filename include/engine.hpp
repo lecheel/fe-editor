@@ -9,7 +9,7 @@
 
 class VimEngine {
 public:
-    VimEngine();
+    explicit VimEngine(bool verbose = false);
     ~VimEngine();
 
     void run();
