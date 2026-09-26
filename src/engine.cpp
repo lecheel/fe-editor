@@ -21,6 +21,9 @@ namespace fs = std::filesystem;
 #ifndef NCKEY_F04
 #define NCKEY_F04 (NCKEY_F01 + 3)
 #endif
+#ifndef NCKEY_F11
+#define NCKEY_F11 (NCKEY_F01 + 10)
+#endif
 
 std::string VimEngine::detect_project_dir(const std::string& start_path) {
     std::string dir = start_path;
@@ -111,6 +114,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "",
             "// --- File Picker & Search ------------------------------------------------",
             "//   [Alt-e]         Fuzzy file finder across project repository",
+            "//   [F11] / [:vg]   Ripgrep search results popup (reopen / toggle)",
             "//   [:vg <pattern>] Ripgrep grouped search in full-screen popup",
             "//   [:vg]           Reopen last ripgrep search (persisted in rg_search.json)",
             "//   In Search Popup: [j/k/Up/Down] navigate matches, [{/}] file groups, [Enter] open",
@@ -175,7 +179,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
 
     load_rg_cache();
 
-    set_info_msg("[Space] Leader | [Alt-e] Files | [:vg] Ripgrep | [F2/F3] Hunks | [F9] Settings");
+    set_info_msg("[Space] Leader | [Alt-e] Files | [F11] Ripgrep | [F2/F3] Hunks | [F9] Settings");
 }
 
 int VimEngine::get_line_num_w(const TextBuffer& buf) const {
@@ -1662,7 +1666,7 @@ void VimEngine::open_selected_rg_match() {
 }
 
 void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
-    if (key == NCKEY_ESC || key == 'q' || key == 'Q') {
+    if (key == NCKEY_ESC || key == NCKEY_F11 || (ni.id == NCKEY_F11) || key == 'q' || key == 'Q') {
         show_rg_popup = false;
         set_info_msg("");
         return;
@@ -1760,7 +1764,7 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + popup_w - 1, "┤");
 
     // Title
-    std::string title = " Ripgrep Grouped Search (:vg) ";
+    std::string title = " Ripgrep Grouped Search (:vg / F11) ";
     ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 
@@ -1862,7 +1866,7 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     }
 
     // Footer actions
-    std::string footer = " [j/k/▲/▼] Match  [{/}] File Group  [Enter] Open  [r] Rescan  [Esc/q] Close ";
+    std::string footer = " [j/k/▲/▼] Match  [{/}] File Group  [Enter] Open  [r] Rescan  [F11/Esc/q] Close ";
     ncplane_set_fg_rgb8(stdplane, 255, 215, 80);
     ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
     ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
@@ -2751,6 +2755,29 @@ void VimEngine::run() {
 
         LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
              key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
+
+        if (key == NCKEY_F11 || ni.id == NCKEY_F11) {
+            if (show_rg_popup) {
+                show_rg_popup = false;
+            } else {
+                show_filepicker = false;
+                show_settings_popup = false;
+                show_git_hunk_popup = false;
+                show_whichkey_popup = false;
+                if (!rg_groups.empty()) {
+                    show_rg_popup = true;
+                    set_info_msg("Ripgrep: \"" + rg_query + "\" (" + std::to_string(rg_flattened_matches.size()) + " matches)");
+                } else {
+                    std::string c_word = get_word_under_cursor();
+                    if (!c_word.empty()) {
+                        run_ripgrep(c_word);
+                    } else {
+                        set_info_msg("No previous search results. Usage: :vg <pattern>");
+                    }
+                }
+            }
+            continue;
+        }
 
         if (show_rg_popup) {
             handle_rg_popup_input(ni, key);
