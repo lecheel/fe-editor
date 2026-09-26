@@ -2,6 +2,7 @@
 #include "log.hpp"
 #include <clocale>
 #include <cmath>
+#include <cctype>
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -11,6 +12,120 @@
 #include <algorithm>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+struct FileLocationTarget {
+    std::string path;
+    int line = -1; // 1-based, -1 if unspecified
+    int col = -1;  // 1-based, -1 if unspecified
+};
+
+FileLocationTarget parse_file_spec(const std::string& arg) {
+    FileLocationTarget target;
+    target.path = arg;
+    target.line = -1;
+    target.col = -1;
+
+    if (arg.empty()) return target;
+
+    auto is_number = [](const std::string& s) {
+        if (s.empty()) return false;
+        for (char c : s) {
+            if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+        }
+        return true;
+    };
+
+    // Check for colon separation: path:line:col or path:line
+    size_t last_colon = arg.rfind(':');
+    if (last_colon != std::string::npos && last_colon > 0) {
+        std::string part1 = arg.substr(last_colon + 1);
+
+        if (is_number(part1)) {
+            size_t prev_colon = arg.rfind(':', last_colon - 1);
+            if (prev_colon != std::string::npos && prev_colon > 0) {
+                std::string part2 = arg.substr(prev_colon + 1, last_colon - prev_colon - 1);
+                if (is_number(part2)) {
+                    std::string potential_path = arg.substr(0, prev_colon);
+                    std::error_code ec;
+                    if (!fs::exists(arg, ec) || fs::exists(potential_path, ec)) {
+                        target.path = potential_path;
+                        try { target.line = std::stoi(part2); } catch (...) {}
+                        try { target.col = std::stoi(part1); } catch (...) {}
+                        return target;
+                    }
+                }
+            }
+
+            std::string potential_path = arg.substr(0, last_colon);
+            std::error_code ec;
+            if (!fs::exists(arg, ec) || fs::exists(potential_path, ec)) {
+                target.path = potential_path;
+                try { target.line = std::stoi(part1); } catch (...) {}
+                target.col = -1;
+                return target;
+            }
+        }
+    }
+
+    return target;
+}
+
+std::vector<FileLocationTarget> parse_file_location_args(const std::vector<std::string>& raw_args) {
+    std::vector<FileLocationTarget> targets;
+    int pending_line = -1;
+    int pending_col = -1;
+
+    for (const auto& arg : raw_args) {
+        if (arg.empty()) continue;
+
+        // Check for +<line> or +<line>:<col> or +<line>,<col>
+        if (arg[0] == '+' && arg.size() > 1 && std::isdigit(static_cast<unsigned char>(arg[1]))) {
+            int pline = -1, pcol = -1;
+            size_t sep = arg.find_first_of(":,", 1);
+            if (sep != std::string::npos) {
+                std::string lstr = arg.substr(1, sep - 1);
+                std::string cstr = arg.substr(sep + 1);
+                try { pline = std::stoi(lstr); } catch (...) {}
+                try { pcol = std::stoi(cstr); } catch (...) {}
+            } else {
+                try { pline = std::stoi(arg.substr(1)); } catch (...) {}
+            }
+
+            pending_line = pline;
+            pending_col = pcol;
+            continue;
+        }
+
+        FileLocationTarget t = parse_file_spec(arg);
+        if (pending_line > 0) {
+            if (t.line <= 0) {
+                t.line = pending_line;
+                if (pending_col > 0 && t.col <= 0) {
+                    t.col = pending_col;
+                }
+            }
+            pending_line = -1;
+            pending_col = -1;
+        }
+        targets.push_back(t);
+    }
+
+    // Trailing +<line> applied to last file (e.g. file1 +50)
+    if (pending_line > 0 && !targets.empty()) {
+        if (targets.back().line <= 0) {
+            targets.back().line = pending_line;
+            if (pending_col > 0 && targets.back().col <= 0) {
+                targets.back().col = pending_col;
+            }
+        }
+    }
+
+    return targets;
+}
+
+} // namespace
 
 #ifndef NCKEY_F02
 #define NCKEY_F02 (NCKEY_F01 + 1)
@@ -59,7 +174,9 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
 
     config.load();
 
-    project_dir = detect_project_dir(!files.empty() ? files[0] : "");
+    auto file_targets = parse_file_location_args(files);
+
+    project_dir = detect_project_dir(!file_targets.empty() ? file_targets[0].path : "");
     try {
         project_name = fs::path(project_dir).filename().string();
     } catch (...) {
@@ -75,9 +192,9 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     }
     stdplane = notcurses_stdplane(nc);
 
-    if (!files.empty()) {
-        for (const auto& path : files) {
-            buffers.push_back(TextBuffer::from_file(path));
+    if (!file_targets.empty()) {
+        for (const auto& target : file_targets) {
+            buffers.push_back(TextBuffer::from_file(target.path));
         }
     } else {
         buffers.push_back(std::make_shared<TextBuffer>("buffer-1.cpp", std::vector<std::string>{
@@ -173,11 +290,37 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     w.id = 1;
     w.buffer_idx = 0;
     restore_window_position(w, *buffers[0]);
+
+    for (size_t i = 0; i < file_targets.size() && i < buffers.size(); ++i) {
+        const auto& target = file_targets[i];
+        if (target.line > 0) {
+            int ty = std::clamp(target.line - 1, 0, std::max(0, static_cast<int>(buffers[i]->lines.size()) - 1));
+            int tx = 0;
+            if (target.col > 0 && ty < static_cast<int>(buffers[i]->lines.size())) {
+                tx = std::clamp(target.col - 1, 0, static_cast<int>(buffers[i]->lines[ty].size()));
+            }
+            std::string key = !buffers[i]->file_path.empty() ? buffers[i]->file_path : buffers[i]->name;
+            config.set_position(key, ty, tx, 0);
+
+            if (i == 0) {
+                w.cursors = {{ty, tx}};
+                w.clamp_all_cursors(*buffers[0], mode);
+                w.scroll_y = std::max(0, ty - 10);
+            }
+        }
+    }
+
     windows.push_back(w);
 
     load_rg_cache();
 
-    set_info_msg("[F12] Help | [F2/F3] Hunks | [F4] Diff | [F9] Settings | [F11] Ripgrep | [Space] Leader");
+    if (!file_targets.empty() && file_targets[0].line > 0) {
+        set_info_msg("\"" + buffers[0]->name + "\" [" +
+                     std::to_string(w.cursors.front().y + 1) + ":" +
+                     std::to_string(w.cursors.front().x + 1) + "]");
+    } else {
+        set_info_msg("[F12] Help | [F2/F3] Hunks | [F4] Diff | [F9] Settings | [F11] Ripgrep | [Space] Leader");
+    }
 }
 
 int VimEngine::get_line_num_w(const TextBuffer& buf) const {

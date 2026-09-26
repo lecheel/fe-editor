@@ -626,24 +626,87 @@ void VimEngine::execute_command(const std::string& cmd_str) {
             set_info_msg("E212: Can't open file for writing");
         }
     } else if (cmd == "e" || cmd == "edit") {
-        std::string path;
-        iss >> path;
-        if (!path.empty()) {
-            save_window_position(active_win(), active_buf());
-            size_t found_idx = buffers.size();
-            for (size_t i = 0; i < buffers.size(); ++i) {
-                if (buffers[i]->file_path == path || buffers[i]->name == path) {
-                    found_idx = i;
-                    break;
+        std::string raw_arg;
+        iss >> raw_arg;
+        if (!raw_arg.empty()) {
+            std::string path = raw_arg;
+            int target_line = -1;
+            int target_col = -1;
+
+            if (raw_arg[0] == '+' && raw_arg.size() > 1) {
+                size_t sep = raw_arg.find_first_of(":,", 1);
+                if (sep != std::string::npos) {
+                    try { target_line = std::stoi(raw_arg.substr(1, sep - 1)); } catch (...) {}
+                    try { target_col = std::stoi(raw_arg.substr(sep + 1)); } catch (...) {}
+                } else {
+                    try { target_line = std::stoi(raw_arg.substr(1)); } catch (...) {}
                 }
+                iss >> path;
             }
-            if (found_idx == buffers.size()) {
-                buffers.push_back(TextBuffer::from_file(path));
-                found_idx = buffers.size() - 1;
+
+            if (!path.empty()) {
+                size_t last_colon = path.rfind(':');
+                if (last_colon != std::string::npos && last_colon > 0) {
+                    std::string part1 = path.substr(last_colon + 1);
+                    auto is_num = [](const std::string& s) {
+                        if (s.empty()) return false;
+                        for (char c : s) if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+                        return true;
+                    };
+                    if (is_num(part1)) {
+                        size_t prev_colon = path.rfind(':', last_colon - 1);
+                        if (prev_colon != std::string::npos && prev_colon > 0) {
+                            std::string part2 = path.substr(prev_colon + 1, last_colon - prev_colon - 1);
+                            if (is_num(part2)) {
+                                std::string ppath = path.substr(0, prev_colon);
+                                std::error_code ec;
+                                if (!fs::exists(path, ec) || fs::exists(ppath, ec)) {
+                                    path = ppath;
+                                    try { target_line = std::stoi(part2); } catch (...) {}
+                                    try { target_col = std::stoi(part1); } catch (...) {}
+                                }
+                            }
+                        } else {
+                            std::string ppath = path.substr(0, last_colon);
+                            std::error_code ec;
+                            if (!fs::exists(path, ec) || fs::exists(ppath, ec)) {
+                                path = ppath;
+                                try { target_line = std::stoi(part1); } catch (...) {}
+                            }
+                        }
+                    }
+                }
+
+                save_window_position(active_win(), active_buf());
+                size_t found_idx = buffers.size();
+                for (size_t i = 0; i < buffers.size(); ++i) {
+                    if (buffers[i]->file_path == path || buffers[i]->name == path) {
+                        found_idx = i;
+                        break;
+                    }
+                }
+                if (found_idx == buffers.size()) {
+                    buffers.push_back(TextBuffer::from_file(path));
+                    found_idx = buffers.size() - 1;
+                }
+                active_win().buffer_idx = found_idx;
+                restore_window_position(active_win(), active_buf());
+
+                if (target_line > 0) {
+                    int ty = std::clamp(target_line - 1, 0, std::max(0, static_cast<int>(active_buf().lines.size()) - 1));
+                    int tx = 0;
+                    if (target_col > 0 && ty < static_cast<int>(active_buf().lines.size())) {
+                        tx = std::clamp(target_col - 1, 0, static_cast<int>(active_buf().lines[ty].size()));
+                    }
+                    active_win().cursors = {{ty, tx}};
+                    active_win().clamp_all_cursors(active_buf(), mode);
+                    update_window_scroll(active_win(), active_buf());
+                }
+
+                set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
+            } else {
+                set_info_msg("E471: Argument required");
             }
-            active_win().buffer_idx = found_idx;
-            restore_window_position(active_win(), active_buf());
-            set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
         } else {
             set_info_msg("E471: Argument required");
         }
