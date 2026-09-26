@@ -40,6 +40,10 @@ enum class DotCommand {
 
 DotCommand s_last_dot_cmd = DotCommand::NONE;
 bool s_d_pending = false;
+bool s_dg_pending = false;
+bool s_y_pending = false;
+bool s_g_pending = false;
+bool s_visual_g_pending = false;
 
 int compute_dw_end(const std::string& line, int cx) {
     int len = static_cast<int>(line.size());
@@ -75,6 +79,13 @@ void execute_dot_command(VimEngine& engine, DotCommand cmd, bool is_repeat) {
             if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
                 lines_to_delete.insert(c.y);
             }
+        }
+        engine.yank_reg.is_linewise = true;
+        engine.yank_reg.lines.clear();
+        engine.yank_reg.text.clear();
+        for (int y : lines_to_delete) {
+            engine.yank_reg.lines.push_back(buf.lines[y]);
+            engine.yank_reg.text += buf.lines[y] + "\n";
         }
         std::vector<int> sorted_lines(lines_to_delete.rbegin(), lines_to_delete.rend());
         for (int y : sorted_lines) {
@@ -257,11 +268,94 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         } else if (key == '0') {
             execute_dot_command(*this, DotCommand::D_TOP, false);
             return;
-        } else if (key == 'G' || ni.id == 'G' || key == 'g' || (ni.shift && (key == 'g' || ni.id == 'g'))) {
+        } else if (key == 'G' || ni.id == 'G' || (ni.shift && (key == 'g' || ni.id == 'g'))) {
             execute_dot_command(*this, DotCommand::D_END, false);
+            return;
+        } else if (key == 'g') {
+            s_dg_pending = true;
+            set_info_msg("dg");
             return;
         } else if (key == '$' || (ni.shift && (key == '4' || ni.id == '4'))) {
             execute_dot_command(*this, DotCommand::D_DOLLAR, false);
+            return;
+        } else {
+            set_info_msg("");
+            if (key == NCKEY_ESC) return;
+        }
+    }
+
+    if (s_dg_pending) {
+        s_dg_pending = false;
+        if (key == 'g') {
+            execute_dot_command(*this, DotCommand::D_TOP, false);
+            return;
+        } else {
+            set_info_msg("");
+            if (key == NCKEY_ESC) return;
+        }
+    }
+
+    if (s_y_pending) {
+        s_y_pending = false;
+        if (key == 'y') {
+            std::set<int> lines_to_yank;
+            for (const auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    lines_to_yank.insert(c.y);
+                }
+            }
+            yank_reg.is_linewise = true;
+            yank_reg.lines.clear();
+            yank_reg.text.clear();
+            for (int y : lines_to_yank) {
+                yank_reg.lines.push_back(buf.lines[y]);
+                yank_reg.text += buf.lines[y] + "\n";
+            }
+            set_info_msg(std::to_string(yank_reg.lines.size()) + " line(s) yanked (yy)");
+            return;
+        } else if (key == 'w') {
+            Cursor primary = win.cursors.front();
+            yank_reg.is_linewise = false;
+            yank_reg.lines.clear();
+            if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+                const std::string& line = buf.lines[primary.y];
+                int end_x = compute_dw_end(line, primary.x);
+                yank_reg.text = (end_x > primary.x) ? line.substr(primary.x, end_x - primary.x) : "";
+            } else {
+                yank_reg.text.clear();
+            }
+            yank_reg.lines = {yank_reg.text};
+            set_info_msg("Word yanked (yw)");
+            return;
+        } else if (key == '$' || (ni.shift && (key == '4' || ni.id == '4'))) {
+            Cursor primary = win.cursors.front();
+            yank_reg.is_linewise = false;
+            yank_reg.lines.clear();
+            if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+                const std::string& line = buf.lines[primary.y];
+                yank_reg.text = (primary.x < static_cast<int>(line.size())) ? line.substr(primary.x) : "";
+            } else {
+                yank_reg.text.clear();
+            }
+            yank_reg.lines = {yank_reg.text};
+            set_info_msg("Yanked to line end (y$)");
+            return;
+        } else {
+            set_info_msg("");
+            if (key == NCKEY_ESC) return;
+        }
+    }
+
+    if (s_g_pending) {
+        s_g_pending = false;
+        if (key == 'g') {
+            for (auto& c : win.cursors) {
+                c.y = 0;
+                c.x = 0;
+            }
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Top of file (gg)");
             return;
         } else {
             set_info_msg("");
@@ -342,6 +436,119 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         case 'D':
             execute_dot_command(*this, DotCommand::D_DOLLAR, false);
             break;
+        case 'y':
+            s_y_pending = true;
+            set_info_msg("y");
+            break;
+        case 'Y': {
+            Cursor primary = win.cursors.front();
+            yank_reg.is_linewise = true;
+            yank_reg.lines.clear();
+            yank_reg.text.clear();
+            if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+                yank_reg.lines.push_back(buf.lines[primary.y]);
+                yank_reg.text = buf.lines[primary.y] + "\n";
+            }
+            set_info_msg("1 line yanked (Y)");
+            break;
+        }
+        case 'p': {
+            if (yank_reg.lines.empty() && yank_reg.text.empty()) {
+                set_info_msg("Nothing to paste.");
+                break;
+            }
+            buf.push_undo(win.cursors);
+            if (yank_reg.is_linewise) {
+                Cursor primary = win.cursors.front();
+                int insert_pos = std::min(primary.y + 1, static_cast<int>(buf.lines.size()));
+                buf.lines.insert(buf.lines.begin() + insert_pos, yank_reg.lines.begin(), yank_reg.lines.end());
+                for (auto& c : win.cursors) {
+                    c.y = insert_pos;
+                    c.x = 0;
+                }
+                buf.modified = true;
+                buf.version++;
+                buf.invalidate_hunks();
+                if (buf.syntax) buf.syntax->update_text(buf.lines);
+                win.clamp_all_cursors(buf, mode);
+                update_window_scroll(win, buf);
+                set_info_msg("Pasted " + std::to_string(yank_reg.lines.size()) + " line(s) below (p)");
+            } else {
+                for (auto& c : win.cursors) {
+                    if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                        std::string& line = buf.lines[c.y];
+                        int ins_x = std::min(c.x + (line.empty() ? 0 : 1), static_cast<int>(line.size()));
+                        line.insert(ins_x, yank_reg.text);
+                        c.x = ins_x + static_cast<int>(yank_reg.text.size()) - 1;
+                        c.x = std::max(0, c.x);
+                    }
+                }
+                buf.modified = true;
+                buf.version++;
+                buf.invalidate_hunks();
+                if (buf.syntax) buf.syntax->update_text(buf.lines);
+                win.clamp_all_cursors(buf, mode);
+                update_window_scroll(win, buf);
+                set_info_msg("Pasted text (p)");
+            }
+            break;
+        }
+        case 'P': {
+            if (yank_reg.lines.empty() && yank_reg.text.empty()) {
+                set_info_msg("Nothing to paste.");
+                break;
+            }
+            buf.push_undo(win.cursors);
+            if (yank_reg.is_linewise) {
+                Cursor primary = win.cursors.front();
+                int insert_pos = std::clamp(primary.y, 0, static_cast<int>(buf.lines.size()));
+                buf.lines.insert(buf.lines.begin() + insert_pos, yank_reg.lines.begin(), yank_reg.lines.end());
+                for (auto& c : win.cursors) {
+                    c.y = insert_pos;
+                    c.x = 0;
+                }
+                buf.modified = true;
+                buf.version++;
+                buf.invalidate_hunks();
+                if (buf.syntax) buf.syntax->update_text(buf.lines);
+                win.clamp_all_cursors(buf, mode);
+                update_window_scroll(win, buf);
+                set_info_msg("Pasted " + std::to_string(yank_reg.lines.size()) + " line(s) above (P)");
+            } else {
+                for (auto& c : win.cursors) {
+                    if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                        std::string& line = buf.lines[c.y];
+                        int ins_x = std::clamp(c.x, 0, static_cast<int>(line.size()));
+                        line.insert(ins_x, yank_reg.text);
+                        c.x = ins_x + static_cast<int>(yank_reg.text.size()) - 1;
+                        c.x = std::max(0, c.x);
+                    }
+                }
+                buf.modified = true;
+                buf.version++;
+                buf.invalidate_hunks();
+                if (buf.syntax) buf.syntax->update_text(buf.lines);
+                win.clamp_all_cursors(buf, mode);
+                update_window_scroll(win, buf);
+                set_info_msg("Pasted text (P)");
+            }
+            break;
+        }
+        case 'g':
+            s_g_pending = true;
+            set_info_msg("g");
+            break;
+        case 'G': {
+            int last_y = std::max(0, static_cast<int>(buf.lines.size()) - 1);
+            for (auto& c : win.cursors) {
+                c.y = last_y;
+                c.x = 0;
+            }
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("End of file (G)");
+            break;
+        }
         case '.':
             if (s_last_dot_cmd == DotCommand::NONE) {
                 set_info_msg("No previous change to repeat.");
@@ -419,10 +626,24 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
     auto& buf = active_buf();
 
     if (key == NCKEY_ESC) {
+        s_visual_g_pending = false;
         mode = Mode::NORMAL;
         win.clamp_all_cursors(buf, mode);
         set_info_msg("");
         return;
+    }
+
+    if (s_visual_g_pending) {
+        s_visual_g_pending = false;
+        if (key == 'g') {
+            for (auto& c : win.cursors) {
+                c.y = 0;
+                c.x = 0;
+            }
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            return;
+        }
     }
 
     if (key == ':' || ni.id == ':' || (ni.utf8[0] == ':' && ni.utf8[1] == '\0') ||
@@ -456,6 +677,19 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
         case '$':
             for (auto& c : win.cursors) c.x = win.get_max_x(buf, c.y, mode);
             break;
+        case 'g':
+            s_visual_g_pending = true;
+            break;
+        case 'G': {
+            int last_y = std::max(0, static_cast<int>(buf.lines.size()) - 1);
+            for (auto& c : win.cursors) {
+                c.y = last_y;
+                c.x = 0;
+            }
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            break;
+        }
         case 'I': {
             if (mode == Mode::VISUAL_BLOCK) {
                 buf.push_undo(win.cursors);
@@ -532,10 +766,64 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
             set_info_msg("Block deleted.");
             break;
         }
-        case 'y':
+        case 'y': {
+            Cursor primary = win.cursors.front();
+            yank_reg.lines.clear();
+            yank_reg.text.clear();
+            if (mode == Mode::VISUAL_BLOCK) {
+                yank_reg.is_linewise = false;
+                int min_y = std::min(win.visual_anchor.y, primary.y);
+                int max_y = std::max(win.visual_anchor.y, primary.y);
+                int min_x = std::min(win.visual_anchor.x, primary.x);
+                int max_x = std::max(win.visual_anchor.x, primary.x);
+                for (int y = min_y; y <= max_y && y < static_cast<int>(buf.lines.size()); ++y) {
+                    std::string& l = buf.lines[y];
+                    if (min_x < static_cast<int>(l.size())) {
+                        int count = std::min(max_x - min_x + 1, static_cast<int>(l.size()) - min_x);
+                        std::string part = l.substr(min_x, count);
+                        yank_reg.lines.push_back(part);
+                        yank_reg.text += part + "\n";
+                    } else {
+                        yank_reg.lines.push_back("");
+                        yank_reg.text += "\n";
+                    }
+                }
+            } else {
+                Cursor start = std::min(win.visual_anchor, primary);
+                Cursor end = std::max(win.visual_anchor, primary);
+                if (start.y == end.y) {
+                    yank_reg.is_linewise = false;
+                    std::string& l = buf.lines[start.y];
+                    int count = std::min(end.x - start.x + 1, static_cast<int>(l.size()) - start.x);
+                    if (count > 0 && start.x < static_cast<int>(l.size())) {
+                        yank_reg.text = l.substr(start.x, count);
+                        yank_reg.lines = {yank_reg.text};
+                    }
+                } else {
+                    yank_reg.is_linewise = false;
+                    for (int y = start.y; y <= end.y && y < static_cast<int>(buf.lines.size()); ++y) {
+                        std::string& l = buf.lines[y];
+                        if (y == start.y) {
+                            std::string part = (start.x < static_cast<int>(l.size())) ? l.substr(start.x) : "";
+                            yank_reg.lines.push_back(part);
+                            yank_reg.text += part + "\n";
+                        } else if (y == end.y) {
+                            int count = std::min(end.x + 1, static_cast<int>(l.size()));
+                            std::string part = l.substr(0, count);
+                            yank_reg.lines.push_back(part);
+                            yank_reg.text += part;
+                        } else {
+                            yank_reg.lines.push_back(l);
+                            yank_reg.text += l + "\n";
+                        }
+                    }
+                }
+            }
             mode = Mode::NORMAL;
-            set_info_msg("Selection yanked.");
+            win.clamp_all_cursors(buf, mode);
+            set_info_msg("Selection yanked (" + std::to_string(yank_reg.text.size()) + " chars).");
             break;
+        }
     }
 }
 

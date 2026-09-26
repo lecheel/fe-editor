@@ -13,6 +13,13 @@
 
 class VimEngine {
 public:
+    struct YankRegister {
+        bool is_linewise{true};
+        std::vector<std::string> lines;
+        std::string text;
+    };
+    YankRegister yank_reg;
+
     explicit VimEngine(bool verbose = false, const std::vector<std::string>& files = {});
     ~VimEngine();
 
@@ -43,17 +50,15 @@ private:
     bool show_whichkey_popup{false};
     std::chrono::steady_clock::time_point leader_start_time;
 
-    // Command mode :e file completion state
+    bool show_buffer_list{false};
+    int buffer_list_selected_idx{0};
+
     bool show_cmd_completion{false};
     std::string cmd_completion_prefix;
     std::string cmd_completion_base_cmd;
     std::vector<std::string> cmd_completion_candidates;
     int cmd_completion_selected_idx{0};
     int cmd_completion_scroll_row{0};
-
-    // Buffer list popup state
-    bool show_buffer_list{false};
-    int buffer_list_selected_idx{0};
 
     bool show_mini_help{false};
     bool show_filepicker{false};

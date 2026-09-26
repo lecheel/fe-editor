@@ -246,6 +246,8 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "// --- Navigation & Editing ------------------------------------------------",
             "//   h / j / k / l   Move left, down, up, right (also Arrows, Home, End, PgUp, PgDown)",
             "//   0 / $           Jump to line start / end",
+            "//   gg / G          Jump to top / end of file",
+            "//   yy / p / P      Yank line, paste after / paste before cursor",
             "//   dd / dw / d^ / d$ Delete line, word, to line start, to line end",
             "//   d0 / dG         Delete to top of file / end of file",
             "//   .               Repeat last change (dd, dw, d^, d0, d$, dG)",
