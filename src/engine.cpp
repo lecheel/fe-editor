@@ -1,11 +1,58 @@
 #include "engine.hpp"
 #include "log.hpp"
 #include <clocale>
+#include <cmath>
 #include <iostream>
 #include <sstream>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <algorithm>
+
+namespace fs = std::filesystem;
+
+#ifndef NCKEY_F02
+#define NCKEY_F02 (NCKEY_F01 + 1)
+#endif
+#ifndef NCKEY_F03
+#define NCKEY_F03 (NCKEY_F01 + 2)
+#endif
+#ifndef NCKEY_F04
+#define NCKEY_F04 (NCKEY_F01 + 3)
+#endif
+
+std::string VimEngine::detect_project_dir(const std::string& start_path) {
+    std::string dir = start_path;
+    std::error_code ec;
+    if (dir.empty()) {
+        dir = fs::current_path(ec).string();
+    } else {
+        fs::path p = fs::absolute(start_path, ec);
+        if (!ec) {
+            dir = fs::is_directory(p, ec) ? p.string() : p.parent_path().string();
+        }
+    }
+    if (dir.empty()) dir = ".";
+
+    std::string cmd = "git -C \"" + dir + "\" rev-parse --show-toplevel 2>/dev/null";
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (fp) {
+        char buf[1024];
+        std::string toplevel;
+        if (fgets(buf, sizeof(buf), fp)) {
+            toplevel = buf;
+            while (!toplevel.empty() && (toplevel.back() == '\n' || toplevel.back() == '\r')) {
+                toplevel.pop_back();
+            }
+        }
+        int status = pclose(fp);
+        if (status == 0 && !toplevel.empty()) {
+            return toplevel;
+        }
+    }
+
+    return fs::current_path(ec).string();
+}
 
 VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     Log::init(verbose, "fe_debug.log");
@@ -13,6 +60,14 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     setlocale(LC_ALL, "");
 
     config.load();
+
+    project_dir = detect_project_dir(!files.empty() ? files[0] : "");
+    try {
+        project_name = fs::path(project_dir).filename().string();
+    } catch (...) {
+        project_name = "fe";
+    }
+    if (project_name.empty()) project_name = "fe";
 
     notcurses_options opts = {};
     opts.flags = NCOPTION_SUPPRESS_BANNERS;
@@ -61,14 +116,18 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     restore_window_position(w, *buffers[0]);
     windows.push_back(w);
 
-    set_info_msg("[F9] Line Hunk Settings | [:] Command | [v] Visual | [Ctrl-v] Block | [Alt-s/v] Split");
+    set_info_msg("[F2/F3] Prev/Next Hunk | [F4] Hunk Diff | [F9] Settings | [:] Cmd | [v] Visual");
 }
 
 int VimEngine::get_line_num_w(const TextBuffer& buf) const {
-    if (!config.settings.show_line_numbers) return 0;
-    if (config.settings.line_number_width > 0) return config.settings.line_number_width;
+    if (!config.settings.show_line_numbers) {
+        return buf.is_git_repo ? 2 : 0;
+    }
+    if (config.settings.line_number_width > 0) {
+        return std::max(4, config.settings.line_number_width);
+    }
     int digits = static_cast<int>(std::to_string(std::max(1UL, buf.lines.size())).size());
-    return std::max(3, digits + 2);
+    return std::max(4, digits + 2);
 }
 
 VimEngine::~VimEngine() {
@@ -590,6 +649,22 @@ void VimEngine::execute_command(const std::string& cmd_str) {
         } else {
             set_info_msg("Invalid buffer index (1-" + std::to_string(buffers.size()) + ")");
         }
+    } else if (cmd == "pwd" || cmd == "proj" || cmd == "project") {
+        set_info_msg("Project [" + project_name + "]: " + project_dir);
+    } else if (cmd == "cd") {
+        std::string dir;
+        iss >> dir;
+        if (dir.empty()) dir = project_dir;
+        std::error_code ec;
+        fs::current_path(dir, ec);
+        if (!ec) {
+            project_dir = detect_project_dir(dir);
+            try { project_name = fs::path(project_dir).filename().string(); } catch (...) {}
+            if (project_name.empty()) project_name = "fe";
+            set_info_msg("Directory changed to: " + dir + " (Project: " + project_name + ")");
+        } else {
+            set_info_msg("E344: Can't find directory " + dir);
+        }
     } else {
         set_info_msg("E492: Not an editor command: " + cmd);
     }
@@ -665,7 +740,257 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
             }
         }
         buf.modified = true;
+        buf.invalidate_hunks();
         win.deduplicate_cursors();
+    }
+}
+
+void VimEngine::jump_to_prev_hunk() {
+    auto& win = active_win();
+    auto& buf = active_buf();
+    const auto& hunks = buf.get_hunks();
+    if (hunks.empty()) {
+        set_info_msg("Git: No hunks found.");
+        return;
+    }
+    Cursor primary = win.cursors.front();
+    int target_idx = -1;
+    for (int i = static_cast<int>(hunks.size()) - 1; i >= 0; --i) {
+        if (hunks[i].cur_start < primary.y) {
+            target_idx = i;
+            break;
+        }
+    }
+    if (target_idx == -1) {
+        target_idx = static_cast<int>(hunks.size()) - 1;
+    }
+    win.cursors = {{hunks[target_idx].cur_start, 0}};
+    win.clamp_all_cursors(buf, mode);
+    update_window_scroll(win, buf);
+    set_info_msg("Git: Hunk " + std::to_string(target_idx + 1) + "/" + std::to_string(hunks.size()) +
+                 " (Line " + std::to_string(hunks[target_idx].cur_start + 1) + ")");
+}
+
+void VimEngine::jump_to_next_hunk() {
+    auto& win = active_win();
+    auto& buf = active_buf();
+    const auto& hunks = buf.get_hunks();
+    if (hunks.empty()) {
+        set_info_msg("Git: No hunks found.");
+        return;
+    }
+    Cursor primary = win.cursors.front();
+    int target_idx = -1;
+    for (size_t i = 0; i < hunks.size(); ++i) {
+        if (hunks[i].cur_start > primary.y) {
+            target_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    if (target_idx == -1) {
+        target_idx = 0;
+    }
+    win.cursors = {{hunks[target_idx].cur_start, 0}};
+    win.clamp_all_cursors(buf, mode);
+    update_window_scroll(win, buf);
+    set_info_msg("Git: Hunk " + std::to_string(target_idx + 1) + "/" + std::to_string(hunks.size()) +
+                 " (Line " + std::to_string(hunks[target_idx].cur_start + 1) + ")");
+}
+
+void VimEngine::open_git_hunk_popup() {
+    auto& win = active_win();
+    auto& buf = active_buf();
+    const auto& hunks = buf.get_hunks();
+    if (hunks.empty()) {
+        set_info_msg("Git: No hunks in current buffer.");
+        return;
+    }
+
+    Cursor primary = win.cursors.front();
+    int best_idx = 0;
+    int min_dist = 999999;
+    for (size_t i = 0; i < hunks.size(); ++i) {
+        int h_start = hunks[i].cur_start;
+        int h_end = hunks[i].cur_start + std::max(1, hunks[i].cur_count) - 1;
+        if (primary.y >= h_start && primary.y <= h_end) {
+            best_idx = static_cast<int>(i);
+            min_dist = 0;
+            break;
+        }
+        int dist = std::min(std::abs(primary.y - h_start), std::abs(primary.y - h_end));
+        if (dist < min_dist) {
+            min_dist = dist;
+            best_idx = static_cast<int>(i);
+        }
+    }
+    active_hunk_idx = best_idx;
+    show_git_hunk_popup = true;
+}
+
+void VimEngine::revert_active_hunk() {
+    auto& win = active_win();
+    auto& buf = active_buf();
+    const auto& hunks = buf.get_hunks();
+    if (active_hunk_idx < 0 || active_hunk_idx >= static_cast<int>(hunks.size())) return;
+
+    const auto& hunk = hunks[active_hunk_idx];
+    buf.push_undo(win.cursors);
+
+    int start = hunk.cur_start;
+    int count = hunk.cur_count;
+
+    if (start < static_cast<int>(buf.lines.size())) {
+        int erase_count = std::min(count, static_cast<int>(buf.lines.size()) - start);
+        buf.lines.erase(buf.lines.begin() + start, buf.lines.begin() + start + erase_count);
+    }
+    if (!hunk.orig_lines.empty()) {
+        int insert_pos = std::min(start, static_cast<int>(buf.lines.size()));
+        buf.lines.insert(buf.lines.begin() + insert_pos, hunk.orig_lines.begin(), hunk.orig_lines.end());
+    }
+    if (buf.lines.empty()) {
+        buf.lines.push_back("");
+    }
+
+    buf.modified = true;
+    buf.invalidate_hunks();
+
+    win.cursors = {{start, 0}};
+    win.clamp_all_cursors(buf, mode);
+    update_window_scroll(win, buf);
+
+    show_git_hunk_popup = false;
+    set_info_msg("Git: Hunk #" + std::to_string(active_hunk_idx + 1) + " reverted. Undo with 'u'.");
+}
+
+void VimEngine::handle_git_hunk_popup(const ncinput& ni, uint32_t key) {
+    auto& buf = active_buf();
+    const auto& hunks = buf.get_hunks();
+
+    if (key == NCKEY_ESC || key == NCKEY_F04 || (ni.id == NCKEY_F04) || key == 'q' || key == 'Q') {
+        show_git_hunk_popup = false;
+        return;
+    }
+
+    if (hunks.empty()) {
+        show_git_hunk_popup = false;
+        return;
+    }
+
+    if (key == 'r' || key == 'R') {
+        revert_active_hunk();
+        return;
+    }
+
+    if (key == NCKEY_F02 || (ni.id == NCKEY_F02) || key == NCKEY_UP || key == 'k' || key == 'K') {
+        active_hunk_idx = (active_hunk_idx + static_cast<int>(hunks.size()) - 1) % hunks.size();
+    } else if (key == NCKEY_F03 || (ni.id == NCKEY_F03) || key == NCKEY_DOWN || key == 'j' || key == 'J') {
+        active_hunk_idx = (active_hunk_idx + 1) % hunks.size();
+    }
+}
+
+void VimEngine::render_git_hunk_popup(unsigned int screen_h, unsigned int screen_w) {
+    auto& buf = active_buf();
+    const auto& hunks = buf.get_hunks();
+    if (active_hunk_idx < 0 || active_hunk_idx >= static_cast<int>(hunks.size())) {
+        show_git_hunk_popup = false;
+        return;
+    }
+
+    const auto& hunk = hunks[active_hunk_idx];
+
+    // Compute diff lines to display
+    std::vector<std::pair<char, std::string>> diff_entries;
+    for (const auto& l : hunk.orig_lines) {
+        diff_entries.push_back({'-', l});
+    }
+    for (const auto& l : hunk.cur_lines) {
+        diff_entries.push_back({'+', l});
+    }
+
+    int popup_w = std::max(48, static_cast<int>(screen_w * 0.70));
+    popup_w = std::min(popup_w, static_cast<int>(screen_w) - 2);
+
+    int diff_lines_avail = std::min(static_cast<int>(diff_entries.size()), 12);
+    int popup_h = std::max(7, diff_lines_avail + 5);
+    popup_h = std::min(popup_h, static_cast<int>(screen_h) - 2);
+
+    int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
+    int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
+
+    // Background
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    // Border (roundbox)
+    ncplane_set_fg_rgb8(stdplane, 200, 100, 255);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+
+    // Title
+    std::string type_str = (hunk.type == HunkType::ADDED) ? "ADDED" :
+                           ((hunk.type == HunkType::MODIFIED) ? "MODIFIED" : "DELETED");
+    std::string title = " Git Hunk (" + std::to_string(active_hunk_idx + 1) + "/" +
+                        std::to_string(hunks.size()) + ") [" + type_str + "] ";
+    if (static_cast<int>(title.size()) < popup_w - 4) {
+        ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+    }
+
+    // Unified diff header @@ -orig,len +cur,len @@
+    char hdr[128];
+    snprintf(hdr, sizeof(hdr), "@@ -%d,%d +%d,%d @@",
+             hunk.orig_start + 1, std::max(1, hunk.orig_count),
+             hunk.cur_start + 1, std::max(1, hunk.cur_count));
+    ncplane_set_fg_rgb8(stdplane, 80, 200, 240);
+    ncplane_set_bg_rgb8(stdplane, 28, 30, 40);
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, hdr);
+
+    // Diff lines
+    int max_draw_lines = popup_h - 4;
+    for (int i = 0; i < max_draw_lines && i < static_cast<int>(diff_entries.size()); ++i) {
+        int draw_y = popup_y + 2 + i;
+        char sign = diff_entries[i].first;
+        const std::string& text = diff_entries[i].second;
+
+        if (sign == '-') {
+            ncplane_set_fg_rgb8(stdplane, 255, 110, 110);
+            ncplane_set_bg_rgb8(stdplane, 50, 20, 25);
+        } else {
+            ncplane_set_fg_rgb8(stdplane, 110, 240, 140);
+            ncplane_set_bg_rgb8(stdplane, 20, 48, 28);
+        }
+
+        std::string line_disp = std::string(1, sign) + " " + text;
+        int max_len = popup_w - 4;
+        if (static_cast<int>(line_disp.size()) > max_len) {
+            line_disp = line_disp.substr(0, max_len);
+        } else {
+            line_disp += std::string(max_len - line_disp.size(), ' ');
+        }
+        ncplane_putstr_yx(stdplane, draw_y, popup_x + 2, line_disp.c_str());
+    }
+
+    // Footer actions
+    ncplane_set_fg_rgb8(stdplane, 255, 230, 100);
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    std::string footer = " [r] Revert Hunk   [F2/F3] Prev/Next   [Esc/F4/q] Close ";
+    if (static_cast<int>(footer.size()) < popup_w - 2) {
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 2, footer.c_str());
     }
 }
 
@@ -717,6 +1042,9 @@ void VimEngine::render() {
     if (show_settings_popup) {
         render_settings_popup(screen_h, screen_w);
         notcurses_cursor_disable(nc);
+    } else if (show_git_hunk_popup) {
+        render_git_hunk_popup(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
     }
 
     notcurses_render(nc);
@@ -746,30 +1074,86 @@ void VimEngine::render_window(Window& win, bool is_active) {
         if (gutter_w > 0) {
             bool is_cursor_line = (line_idx == primary.y);
             if (is_cursor_line && config.settings.highlight_current_line && is_active) {
-                ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
                 ncplane_set_bg_rgb8(stdplane, 35, 38, 48);
-            } else if (is_active) {
-                ncplane_set_fg_rgb8(stdplane, 80, 160, 200);
-                ncplane_set_bg_rgb8(stdplane, 22, 22, 26);
             } else {
-                ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
                 ncplane_set_bg_rgb8(stdplane, 22, 22, 26);
             }
 
-            if (line_idx < static_cast<int>(buf.lines.size())) {
-                int disp_num = line_idx + 1;
-                if (config.settings.line_number_mode == LineNumberMode::RELATIVE) {
-                    disp_num = std::abs(line_idx - primary.y);
-                } else if (config.settings.line_number_mode == LineNumberMode::HYBRID) {
-                    disp_num = is_cursor_line ? (line_idx + 1) : std::abs(line_idx - primary.y);
+            // Determine git hunk gutter sign (~, +, -)
+            char git_sign = ' ';
+            if (buf.is_git_repo && line_idx < static_cast<int>(buf.lines.size())) {
+                const auto& hunks = buf.get_hunks();
+                for (const auto& h : hunks) {
+                    if (h.type == HunkType::ADDED) {
+                        if (line_idx >= h.cur_start && line_idx < h.cur_start + h.cur_count) {
+                            git_sign = '+';
+                            break;
+                        }
+                    } else if (h.type == HunkType::MODIFIED) {
+                        if (line_idx >= h.cur_start && line_idx < h.cur_start + h.cur_count) {
+                            git_sign = '~';
+                            break;
+                        }
+                    } else if (h.type == HunkType::DELETED) {
+                        int del_pos = std::min(h.cur_start, static_cast<int>(buf.lines.size()) - 1);
+                        if (line_idx == del_pos) {
+                            git_sign = '-';
+                            break;
+                        }
+                    }
                 }
-                std::string fmt = "%" + std::to_string(gutter_w - 1) + "d ";
-                ncplane_printf_yx(stdplane, draw_y, win.x, fmt.c_str(), disp_num);
+            }
+
+            if (config.settings.show_line_numbers) {
+                if (line_idx < static_cast<int>(buf.lines.size())) {
+                    if (is_cursor_line && config.settings.highlight_current_line && is_active) {
+                        ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+                    } else if (is_active) {
+                        ncplane_set_fg_rgb8(stdplane, 80, 160, 200);
+                    } else {
+                        ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
+                    }
+
+                    int disp_num = line_idx + 1;
+                    if (config.settings.line_number_mode == LineNumberMode::RELATIVE) {
+                        disp_num = std::abs(line_idx - primary.y);
+                    } else if (config.settings.line_number_mode == LineNumberMode::HYBRID) {
+                        disp_num = is_cursor_line ? (line_idx + 1) : std::abs(line_idx - primary.y);
+                    }
+                    std::string num_fmt = "%" + std::to_string(gutter_w - 2) + "d";
+                    ncplane_printf_yx(stdplane, draw_y, win.x, num_fmt.c_str(), disp_num);
+
+                    // Print git sign column
+                    if (git_sign == '+') {
+                        ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+                    } else if (git_sign == '~') {
+                        ncplane_set_fg_rgb8(stdplane, 80, 180, 240);
+                    } else if (git_sign == '-') {
+                        ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
+                    } else {
+                        ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
+                    }
+                    char sign_buf[3] = {git_sign, ' ', '\0'};
+                    ncplane_putstr_yx(stdplane, draw_y, win.x + gutter_w - 2, sign_buf);
+                } else {
+                    ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
+                    std::string tilde;
+                    for (int sp = 0; sp < std::max(0, gutter_w - 2); ++sp) tilde += " ";
+                    tilde += "~ ";
+                    ncplane_putstr_yx(stdplane, draw_y, win.x, tilde.c_str());
+                }
             } else {
-                std::string tilde;
-                for (int sp = 0; sp < std::max(0, gutter_w - 2); ++sp) tilde += " ";
-                tilde += "~ ";
-                ncplane_putstr_yx(stdplane, draw_y, win.x, tilde.c_str());
+                if (git_sign == '+') {
+                    ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+                } else if (git_sign == '~') {
+                    ncplane_set_fg_rgb8(stdplane, 80, 180, 240);
+                } else if (git_sign == '-') {
+                    ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
+                } else {
+                    ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
+                }
+                char sign_buf[3] = {git_sign, ' ', '\0'};
+                ncplane_putstr_yx(stdplane, draw_y, win.x, sign_buf);
             }
         }
 
@@ -1008,10 +1392,23 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
     ncplane_set_fg_rgb8(stdplane, 230, 230, 230);
     ncplane_set_bg_rgb8(stdplane, 40, 44, 52);
 
+    std::string display_name = buf.name;
+    if (!buf.file_path.empty() && !project_dir.empty()) {
+        try {
+            std::error_code ec;
+            fs::path p = fs::absolute(buf.file_path, ec);
+            fs::path root = fs::absolute(project_dir, ec);
+            auto rel = fs::relative(p, root, ec);
+            if (!ec && !rel.empty() && rel.string().rfind("..", 0) != 0) {
+                display_name = rel.string();
+            }
+        } catch (...) {}
+    }
+
     char left_info[256];
-    snprintf(left_info, sizeof(left_info), " [Win %d/%zu] Buf (%zu/%zu): %s %s",
-             win.id, windows.size(), win.buffer_idx + 1, buffers.size(),
-             buf.name.c_str(), (buf.modified ? "[+]" : ""));
+    snprintf(left_info, sizeof(left_info), " [%s] [Win %d/%zu] Buf (%zu/%zu): %s %s",
+             project_name.c_str(), win.id, windows.size(), win.buffer_idx + 1, buffers.size(),
+             display_name.c_str(), (buf.modified ? "[+]" : ""));
 
     char right_info[256];
     snprintf(right_info, sizeof(right_info), "Cursors: %zu | Ln %d, Col %d | %zu lines ",
@@ -1082,11 +1479,36 @@ void VimEngine::run() {
 
         if (key == NCKEY_F09 || ni.id == NCKEY_F09) {
             show_settings_popup = !show_settings_popup;
+            if (show_settings_popup) show_git_hunk_popup = false;
             continue;
         }
 
         if (show_settings_popup) {
             handle_settings_popup(ni, key);
+            continue;
+        }
+
+        if (key == NCKEY_F02 || ni.id == NCKEY_F02) {
+            jump_to_prev_hunk();
+            continue;
+        }
+
+        if (key == NCKEY_F03 || ni.id == NCKEY_F03) {
+            jump_to_next_hunk();
+            continue;
+        }
+
+        if (key == NCKEY_F04 || ni.id == NCKEY_F04) {
+            if (show_git_hunk_popup) {
+                show_git_hunk_popup = false;
+            } else {
+                open_git_hunk_popup();
+            }
+            continue;
+        }
+
+        if (show_git_hunk_popup) {
+            handle_git_hunk_popup(ni, key);
             continue;
         }
 

@@ -33,12 +33,27 @@ private:
     bool show_settings_popup{false};
     int settings_selected_idx{0};
 
+    bool show_git_hunk_popup{false};
+    int active_hunk_idx{0};
+
+    std::string project_dir;
+    std::string project_name;
+
     ConfigManager config;
+
+    static std::string detect_project_dir(const std::string& start_path = "");
 
     int get_line_num_w(const TextBuffer& buf) const;
     void set_info_msg(std::string msg);
     Window& active_win();
     TextBuffer& active_buf();
+
+    void jump_to_prev_hunk();
+    void jump_to_next_hunk();
+    void open_git_hunk_popup();
+    void revert_active_hunk();
+    void handle_git_hunk_popup(const ncinput& ni, uint32_t key);
+    void render_git_hunk_popup(unsigned int screen_h, unsigned int screen_w);
 
     void handle_settings_popup(const ncinput& ni, uint32_t key);
     void render_settings_popup(unsigned int screen_h, unsigned int screen_w);
