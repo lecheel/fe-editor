@@ -130,6 +130,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   u / U           Undo / Redo (persisted across buffers)",
             "//   [Alt-u]         Undo while inside Insert Mode",
             "//   [Alt-d]         Delete line while inside Insert Mode",
+            "//   [Alt-/]         Autocomplete (prefix >= 3, auto >= 5, Up/Down cycle, Right accept)",
             "",
             "// --- Visual & Multi-Cursor -----------------------------------------------",
             "//   [v]             Character visual mode",

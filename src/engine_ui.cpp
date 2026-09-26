@@ -1,4 +1,5 @@
 #include "engine.hpp"
+#include "autocomplete.hpp"
 #include "log.hpp"
 #include <cmath>
 #include <filesystem>
@@ -543,9 +544,52 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 syn_styles = buf.syntax->get_line_styles(line_idx, line);
             }
 
+            std::string ghost_str;
+            if (is_active && mode == Mode::INSERT && line_idx == primary.y && win.cursors.size() == 1) {
+                ghost_str = AutocompleteState::instance().get_ghost_suffix();
+            }
+            int ghost_len = static_cast<int>(ghost_str.size());
+
             for (int c = 0; c < text_avail_w; ++c) {
                 int char_idx = win.scroll_x + c;
                 int draw_x = win.x + gutter_w + c;
+
+                if (ghost_len > 0) {
+                    if (char_idx >= primary.x && char_idx < primary.x + ghost_len) {
+                        int ghost_i = char_idx - primary.x;
+                        bool has_cursor = (char_idx == primary.x);
+                        if (has_cursor) {
+                            ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
+                            ncplane_set_bg_rgb8(stdplane, 255, 180, 50);
+                            char ch[2] = {ghost_str[ghost_i], '\0'};
+                            ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
+                        } else {
+                            ncplane_set_fg_rgb8(stdplane, 130, 140, 155);
+                            ncplane_set_bg_rgb8(stdplane, 24, 26, 32);
+                            ncplane_on_styles(stdplane, NCSTYLE_ITALIC);
+                            char ch[2] = {ghost_str[ghost_i], '\0'};
+                            ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
+                            ncplane_off_styles(stdplane, NCSTYLE_ITALIC);
+                        }
+                        continue;
+                    }
+
+                    int orig_char_idx = (char_idx < primary.x) ? char_idx : (char_idx - ghost_len);
+                    if (orig_char_idx < static_cast<int>(syn_styles.size())) {
+                        ncplane_set_fg_rgb8(stdplane, syn_styles[orig_char_idx].r, syn_styles[orig_char_idx].g, syn_styles[orig_char_idx].b);
+                    } else {
+                        ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
+                    }
+                    ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
+
+                    if (orig_char_idx >= 0 && orig_char_idx < static_cast<int>(line.size())) {
+                        char ch[2] = {line[orig_char_idx], '\0'};
+                        ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
+                    } else {
+                        ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
+                    }
+                    continue;
+                }
 
                 bool has_cursor = cursor_set.count({line_idx, char_idx});
                 bool in_visual = false;

@@ -1,5 +1,6 @@
 #include "engine.hpp"
 #include "command.hpp"
+#include "autocomplete.hpp"
 #include "log.hpp"
 #include <cmath>
 #include <iostream>
@@ -63,6 +64,7 @@ bool VimEngine::handle_navigation(const ncinput& ni, uint32_t key) {
 }
 
 void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
+    AutocompleteState::instance().reset();
     auto& win = active_win();
     auto& buf = active_buf();
 
@@ -203,6 +205,7 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
 }
 
 void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
+    AutocompleteState::instance().reset();
     auto& win = active_win();
     auto& buf = active_buf();
 
@@ -328,6 +331,7 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
 }
 
 void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
+    AutocompleteState::instance().reset();
     LOGD("handle_command_mode key=%u id=%u utf8=%02x %02x cmd_buffer='%s'",
          key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], cmd_buffer.c_str());
     if (key == NCKEY_ESC) {
@@ -500,8 +504,140 @@ void VimEngine::execute_command(const std::string& cmd_str) {
 void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
+    auto& ac = AutocompleteState::instance();
+
+    if (win.cursors.size() > 1) {
+        ac.reset();
+    }
+
+    auto update_autocomplete_after_edit = [&]() {
+        if (win.cursors.size() != 1) {
+            ac.reset();
+            return;
+        }
+        Cursor primary = win.cursors.front();
+        if (primary.y < 0 || primary.y >= static_cast<int>(buf.lines.size())) {
+            ac.reset();
+            return;
+        }
+        std::string pfx = get_prefix_before_cursor(buf.lines[primary.y], primary.x);
+        if (ac.manual && pfx.size() >= 3) {
+            auto cands = find_local_buffer_candidates(buf.lines, primary.y, pfx);
+            if (!cands.empty()) {
+                ac.active = true;
+                ac.prefix = pfx;
+                ac.candidates = std::move(cands);
+                ac.selected_idx = 0;
+                set_info_msg("Autocomplete [1/" + std::to_string(ac.candidates.size()) + "]: " +
+                             ac.candidates[0] + "  (▲/▼ cycle, ▶ accept)");
+            } else {
+                ac.reset();
+                if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
+            }
+        } else if (pfx.size() >= 5) {
+            auto cands = find_local_buffer_candidates(buf.lines, primary.y, pfx);
+            if (!cands.empty()) {
+                ac.active = true;
+                ac.manual = false;
+                ac.prefix = pfx;
+                ac.candidates = std::move(cands);
+                ac.selected_idx = 0;
+                set_info_msg("Autocomplete [1/" + std::to_string(ac.candidates.size()) + "]: " +
+                             ac.candidates[0] + "  (▲/▼ cycle, ▶ accept)");
+            } else {
+                ac.reset();
+                if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
+            }
+        } else {
+            ac.reset();
+            if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
+        }
+    };
+
+    // Alt-/ manual trigger (>= 3 chars)
+    bool is_alt_slash = ni.alt && (ni.id == '/' || key == '/' || ni.id == '?' || key == '?' ||
+                                   (ni.utf8[0] == '/' && ni.utf8[1] == '\0'));
+    if (is_alt_slash) {
+        Cursor primary = win.cursors.front();
+        if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+            std::string pfx = get_prefix_before_cursor(buf.lines[primary.y], primary.x);
+            if (pfx.size() >= 3) {
+                if (ac.active && ac.prefix == pfx && !ac.candidates.empty()) {
+                    ac.selected_idx = (ac.selected_idx + 1) % ac.candidates.size();
+                    set_info_msg("Autocomplete [" + std::to_string(ac.selected_idx + 1) + "/" +
+                                 std::to_string(ac.candidates.size()) + "]: " +
+                                 ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶ accept)");
+                } else {
+                    auto cands = find_local_buffer_candidates(buf.lines, primary.y, pfx);
+                    if (!cands.empty()) {
+                        ac.active = true;
+                        ac.manual = true;
+                        ac.prefix = pfx;
+                        ac.candidates = std::move(cands);
+                        ac.selected_idx = 0;
+                        set_info_msg("Autocomplete [1/" + std::to_string(ac.candidates.size()) + "]: " +
+                                     ac.candidates[0] + "  (▲/▼ cycle, ▶ accept)");
+                    } else {
+                        ac.reset();
+                        set_info_msg("Autocomplete: No candidates matching '" + pfx + "'");
+                    }
+                }
+            } else {
+                set_info_msg("Autocomplete: Prefix too short (requires >= 3 chars for Alt-/)");
+            }
+        }
+        return;
+    }
+
+    // Intercept Up / Down / Right when autocomplete candidate ghost text is active
+    if (ac.active && !ac.candidates.empty() && win.cursors.size() == 1) {
+        if (key == NCKEY_UP) {
+            ac.selected_idx = (ac.selected_idx + ac.candidates.size() - 1) % ac.candidates.size();
+            set_info_msg("Autocomplete [" + std::to_string(ac.selected_idx + 1) + "/" +
+                         std::to_string(ac.candidates.size()) + "]: " +
+                         ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶ accept)");
+            return;
+        }
+        if (key == NCKEY_DOWN) {
+            ac.selected_idx = (ac.selected_idx + 1) % ac.candidates.size();
+            set_info_msg("Autocomplete [" + std::to_string(ac.selected_idx + 1) + "/" +
+                         std::to_string(ac.candidates.size()) + "]: " +
+                         ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶ accept)");
+            return;
+        }
+        if (key == NCKEY_RIGHT) {
+            std::string cand = ac.get_selected_candidate();
+            std::string pfx = ac.prefix;
+            if (!cand.empty()) {
+                buf.push_undo(win.cursors);
+                Cursor& c = win.cursors.front();
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    std::string& line = buf.lines[c.y];
+                    if (cand.compare(0, pfx.size(), pfx) == 0) {
+                        std::string suffix = cand.substr(pfx.size());
+                        line.insert(c.x, suffix);
+                        c.x += static_cast<int>(suffix.size());
+                    } else {
+                        int start = std::max(0, c.x - static_cast<int>(pfx.size()));
+                        line.replace(start, pfx.size(), cand);
+                        c.x = start + static_cast<int>(cand.size());
+                    }
+                    buf.modified = true;
+                    buf.version++;
+                    buf.invalidate_hunks();
+                    if (buf.syntax) buf.syntax->update_text(buf.lines);
+                    win.clamp_all_cursors(buf, mode);
+                    update_window_scroll(win, buf);
+                }
+                ac.reset();
+                set_info_msg("Completed: " + cand);
+                return;
+            }
+        }
+    }
 
     if (ni.alt && (ni.id == 'u' || ni.id == 'U' || key == 'u' || key == 'U')) {
+        ac.reset();
         if (buf.undo(win.cursors)) {
             win.clamp_all_cursors(buf, mode);
             update_window_scroll(win, buf);
@@ -513,6 +649,7 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
     }
 
     if (ni.alt && (ni.id == 'd' || ni.id == 'D' || key == 'd' || key == 'D')) {
+        ac.reset();
         buf.push_undo(win.cursors);
         std::set<int> lines_to_delete;
         for (const auto& c : win.cursors) {
@@ -538,9 +675,16 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
+    if (key == NCKEY_LEFT || key == NCKEY_HOME || key == NCKEY_END ||
+        key == NCKEY_PGUP || key == NCKEY_PGDOWN || key == NCKEY_UP || key == NCKEY_DOWN) {
+        ac.reset();
+        if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
+    }
+
     if (handle_navigation(ni, key)) return;
 
     if (key == NCKEY_ESC) {
+        ac.reset();
         mode = Mode::NORMAL;
         win.clamp_all_cursors(buf, mode);
         set_info_msg("");
@@ -548,6 +692,8 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
     }
 
     if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
+        ac.reset();
+        if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
         std::sort(win.cursors.begin(), win.cursors.end());
         for (int i = static_cast<int>(win.cursors.size()) - 1; i >= 0; --i) {
             int cy = win.cursors[i].y;
@@ -583,6 +729,7 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         buf.invalidate_hunks();
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         win.deduplicate_cursors();
+        update_autocomplete_after_edit();
         return;
     }
 
@@ -614,5 +761,6 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         buf.invalidate_hunks();
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         win.deduplicate_cursors();
+        update_autocomplete_after_edit();
     }
 }
