@@ -56,6 +56,7 @@ private:
         int line{1};
         int col{1};
         std::string text;
+        bool ignored{false};
     };
     struct RgGroup {
         std::string file;
@@ -71,11 +72,14 @@ private:
     };
 
     bool show_rg_popup{false};
+    bool rg_replace_active{false};
+    std::string rg_replace_query;
     std::string rg_query;
     std::vector<RgGroup> rg_groups;
     std::vector<RgMatch> rg_flattened_matches;
     std::vector<RgDisplayLine> rg_display_lines;
     int rg_selected_match_idx{0};
+    int rg_selected_display_idx{0};
     int rg_scroll{0};
 
     std::string project_dir;
@@ -110,6 +114,7 @@ private:
     void load_rg_cache();
     void rebuild_rg_display_lines();
     void open_selected_rg_match();
+    void apply_rg_replace();
     void handle_rg_popup_input(const ncinput& ni, uint32_t key);
     void render_rg_popup(unsigned int screen_h, unsigned int screen_w);
 
