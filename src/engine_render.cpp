@@ -72,5 +72,9 @@ void VimEngine::render() {
         notcurses_cursor_disable(nc);
     }
 
+    if (mode == Mode::COMMAND && show_cmd_completion) {
+        render_cmd_completion(screen_h, screen_w);
+    }
+
     notcurses_render(nc);
 }

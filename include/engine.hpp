@@ -43,6 +43,14 @@ private:
     bool show_whichkey_popup{false};
     std::chrono::steady_clock::time_point leader_start_time;
 
+    // Command mode :e file completion state
+    bool show_cmd_completion{false};
+    std::string cmd_completion_prefix;
+    std::string cmd_completion_base_cmd;
+    std::vector<std::string> cmd_completion_candidates;
+    int cmd_completion_selected_idx{0};
+    int cmd_completion_scroll_row{0};
+
     bool show_mini_help{false};
     bool show_filepicker{false};
     std::string filepicker_query;
@@ -139,6 +147,13 @@ public:
     bool handle_navigation(const ncinput& ni, uint32_t key);
     void handle_normal_mode(const ncinput& ni, uint32_t key);
     void handle_visual_mode(const ncinput& ni, uint32_t key);
+    void trigger_cmd_completion();
+    void update_cmd_completion();
+    void update_cmd_completion_preview();
+    void close_cmd_completion();
+    void handle_cmd_completion_input(const ncinput& ni, uint32_t key);
+    void render_cmd_completion(unsigned int screen_h, unsigned int screen_w);
+
     void handle_command_mode(const ncinput& ni, uint32_t key);
     void handle_insert_mode(const ncinput& ni, uint32_t key);
     void execute_command(const std::string& cmd_str);

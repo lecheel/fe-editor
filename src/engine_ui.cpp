@@ -11,6 +11,139 @@ extern int g_hunk_marker_style;
 
 namespace fs = std::filesystem;
 
+void VimEngine::render_cmd_completion(unsigned int screen_h, unsigned int screen_w) {
+    if (cmd_completion_candidates.empty()) return;
+
+    const int NUM_COLS = 5;
+    int total_items = static_cast<int>(cmd_completion_candidates.size());
+    int total_rows = (total_items + NUM_COLS - 1) / NUM_COLS;
+
+    // Up to 5 rows of items (capped at 6 if expanded), popup height max 8 lines
+    int visible_rows = std::min(total_rows, 5);
+    if (total_rows >= 6) {
+        visible_rows = 6;
+    }
+    if (visible_rows < 1) visible_rows = 1;
+
+    int popup_h = std::min(8, visible_rows + 2);
+    int popup_w = static_cast<int>(screen_w);
+    int popup_x = 0;
+    int popup_y = (static_cast<int>(screen_h) - 1) - popup_h;
+    popup_y = std::max(0, popup_y);
+
+    int cur_row = cmd_completion_selected_idx / NUM_COLS;
+    if (cur_row < cmd_completion_scroll_row) {
+        cmd_completion_scroll_row = cur_row;
+    }
+    if (cur_row >= cmd_completion_scroll_row + visible_rows) {
+        cmd_completion_scroll_row = cur_row - visible_rows + 1;
+    }
+    cmd_completion_scroll_row = std::max(0, cmd_completion_scroll_row);
+
+    // Background fill
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    // Border (roundbox)
+    ncplane_set_fg_rgb8(stdplane, 75, 185, 235);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+
+    // Title & count
+    std::string title = " Files Completion [2D Grid: 5 cols] ";
+    ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    char stats[64];
+    snprintf(stats, sizeof(stats), " [%d/%d] ", cmd_completion_selected_idx + 1, total_items);
+    int stats_x = popup_x + popup_w - static_cast<int>(std::string(stats).size()) - 2;
+    if (stats_x > popup_x + static_cast<int>(title.size()) + 2) {
+        ncplane_set_fg_rgb8(stdplane, 140, 150, 175);
+        ncplane_putstr_yx(stdplane, popup_y, stats_x, stats);
+    }
+
+    // Render 5 columns x visible_rows cells
+    int avail_w = popup_w - 2;
+    int col_w = std::max(10, avail_w / NUM_COLS);
+
+    for (int r = 0; r < visible_rows; ++r) {
+        int grid_r = cmd_completion_scroll_row + r;
+        int draw_y = popup_y + 1 + r;
+
+        for (int c = 0; c < NUM_COLS; ++c) {
+            int item_idx = grid_r * NUM_COLS + c;
+            int cell_x = popup_x + 1 + c * col_w;
+            int cell_w = (c == NUM_COLS - 1) ? (avail_w - c * col_w) : col_w;
+
+            if (cell_x >= popup_x + popup_w - 1) break;
+
+            if (item_idx < total_items) {
+                bool is_sel = (item_idx == cmd_completion_selected_idx);
+                const std::string& item = cmd_completion_candidates[item_idx];
+                bool is_dir = (!item.empty() && item.back() == '/');
+
+                if (is_sel) {
+                    ncplane_set_bg_rgb8(stdplane, 45, 70, 130);
+                } else {
+                    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+                }
+
+                for (int x = 0; x < cell_w; ++x) {
+                    ncplane_putchar_yx(stdplane, draw_y, cell_x + x, ' ');
+                }
+
+                if (is_sel) {
+                    ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+                    ncplane_putstr_yx(stdplane, draw_y, cell_x + 1, "▶ ");
+                } else if (is_dir) {
+                    ncplane_set_fg_rgb8(stdplane, 80, 200, 240);
+                    ncplane_putstr_yx(stdplane, draw_y, cell_x + 1, "📁");
+                } else {
+                    ncplane_putstr_yx(stdplane, draw_y, cell_x + 1, "  ");
+                }
+
+                if (is_sel) {
+                    ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+                } else if (is_dir) {
+                    ncplane_set_fg_rgb8(stdplane, 130, 215, 255);
+                } else {
+                    ncplane_set_fg_rgb8(stdplane, 215, 220, 230);
+                }
+
+                std::string disp = item;
+                int max_text_w = cell_w - 4;
+                if (max_text_w > 0 && static_cast<int>(disp.size()) > max_text_w) {
+                    disp = ".." + disp.substr(disp.size() - (max_text_w - 2));
+                }
+                if (max_text_w > 0) {
+                    ncplane_putstr_yx(stdplane, draw_y, cell_x + 3, disp.c_str());
+                }
+            }
+        }
+    }
+
+    // Footer actions
+    std::string footer = " [Tab/▲/▼/◀/▶] Navigate  [Enter] Select  [Esc] Cancel ";
+    ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
+}
+
 void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
     struct Slot {
         std::string key;
