@@ -21,8 +21,26 @@ namespace fs = std::filesystem;
 #ifndef NCKEY_F04
 #define NCKEY_F04 (NCKEY_F01 + 3)
 #endif
+#ifndef NCKEY_F05
+#define NCKEY_F05 (NCKEY_F01 + 4)
+#endif
+#ifndef NCKEY_F06
+#define NCKEY_F06 (NCKEY_F01 + 5)
+#endif
+#ifndef NCKEY_F07
+#define NCKEY_F07 (NCKEY_F01 + 6)
+#endif
+#ifndef NCKEY_F08
+#define NCKEY_F08 (NCKEY_F01 + 7)
+#endif
+#ifndef NCKEY_F10
+#define NCKEY_F10 (NCKEY_F01 + 9)
+#endif
 #ifndef NCKEY_F11
 #define NCKEY_F11 (NCKEY_F01 + 10)
+#endif
+#ifndef NCKEY_F12
+#define NCKEY_F12 (NCKEY_F01 + 11)
 #endif
 
 std::string VimEngine::detect_project_dir(const std::string& start_path) {
@@ -179,7 +197,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
 
     load_rg_cache();
 
-    set_info_msg("[Space] Leader | [Alt-e] Files | [F11] Ripgrep | [F2/F3] Hunks | [F9] Settings");
+    set_info_msg("[F12] Help | [F2/F3] Hunks | [F4] Diff | [F9] Settings | [F11] Ripgrep | [Space] Leader");
 }
 
 int VimEngine::get_line_num_w(const TextBuffer& buf) const {
@@ -1665,6 +1683,104 @@ void VimEngine::open_selected_rg_match() {
     set_info_msg("\"" + nb.name + "\" [" + std::to_string(target_y + 1) + ":" + std::to_string(target_x + 1) + "]");
 }
 
+void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
+    struct Slot {
+        std::string key;
+        std::string label;
+    };
+
+    std::vector<Slot> row1 = {
+        {"F1", "--"},
+        {"F2", "Prev Hunk"},
+        {"F3", "Next Hunk"},
+        {"F4", "Hunk Diff"},
+        {"F5", "--"},
+        {"F6", "--"}
+    };
+
+    std::vector<Slot> row2 = {
+        {"F7", "--"},
+        {"F8", "--"},
+        {"F9", "Settings"},
+        {"F10", "--"},
+        {"F11", "Recall Ripg"},
+        {"F12", "Mini Help"}
+    };
+
+    int popup_h = 4;
+    int popup_w = std::min(static_cast<int>(screen_w) - 2, 98);
+    int popup_x = std::max(0, (static_cast<int>(screen_w) - popup_w) / 2);
+    int popup_y = std::max(0, static_cast<int>(screen_h) - 2 - popup_h);
+
+    // Background
+    ncplane_set_bg_rgb8(stdplane, 24, 26, 30);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    // Border: cyan/teal rounded box
+    ncplane_set_fg_rgb8(stdplane, 100, 185, 195);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+
+    // Header Title
+    std::string title = " Help ";
+    ncplane_set_fg_rgb8(stdplane, 160, 220, 230);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    auto draw_slots_row = [&](int draw_y, const std::vector<Slot>& slots) {
+        int avail_w = popup_w - 2;
+        int col_w = avail_w / static_cast<int>(slots.size());
+
+        for (size_t i = 0; i < slots.size(); ++i) {
+            int sx = popup_x + 1 + static_cast<int>(i) * col_w + 1;
+            if (sx + static_cast<int>(slots[i].key.size()) + 5 >= popup_x + popup_w) break;
+
+            // '[' in gold
+            ncplane_set_fg_rgb8(stdplane, 230, 190, 70);
+            ncplane_putstr_yx(stdplane, draw_y, sx, "[");
+
+            // 'F...' in green
+            ncplane_set_fg_rgb8(stdplane, 110, 205, 120);
+            ncplane_putstr_yx(stdplane, draw_y, sx + 1, slots[i].key.c_str());
+
+            // ']' in gold
+            int b_end_x = sx + 1 + static_cast<int>(slots[i].key.size());
+            ncplane_set_fg_rgb8(stdplane, 230, 190, 70);
+            ncplane_putstr_yx(stdplane, draw_y, b_end_x, "] ");
+
+            // label in white/cream
+            if (slots[i].label == "--") {
+                ncplane_set_fg_rgb8(stdplane, 120, 125, 135);
+            } else {
+                ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
+            }
+            int max_lbl_w = col_w - static_cast<int>(slots[i].key.size()) - 4;
+            std::string lbl = slots[i].label;
+            if (static_cast<int>(lbl.size()) > max_lbl_w && max_lbl_w > 0) {
+                lbl = lbl.substr(0, max_lbl_w);
+            }
+            ncplane_putstr_yx(stdplane, draw_y, b_end_x + 2, lbl.c_str());
+        }
+    };
+
+    draw_slots_row(popup_y + 1, row1);
+    draw_slots_row(popup_y + 2, row2);
+}
+
 void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
     if (key == NCKEY_ESC || key == NCKEY_F11 || (ni.id == NCKEY_F11) || key == 'q' || key == 'Q') {
         show_rg_popup = false;
@@ -2233,7 +2349,10 @@ void VimEngine::render() {
         }
     }
 
-    if (show_settings_popup) {
+    if (show_mini_help) {
+        render_mini_help(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
+    } else if (show_settings_popup) {
         render_settings_popup(screen_h, screen_w);
         notcurses_cursor_disable(nc);
     } else if (show_rg_popup) {
@@ -2755,6 +2874,45 @@ void VimEngine::run() {
 
         LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
              key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
+
+        if (key == NCKEY_F12 || ni.id == NCKEY_F12) {
+            show_mini_help = !show_mini_help;
+            continue;
+        }
+
+        if (show_mini_help && (key == NCKEY_ESC || key == 'q' || key == 'Q')) {
+            show_mini_help = false;
+            continue;
+        }
+
+        if (key == NCKEY_F02 || ni.id == NCKEY_F02) {
+            jump_to_prev_hunk();
+            continue;
+        }
+
+        if (key == NCKEY_F03 || ni.id == NCKEY_F03) {
+            jump_to_next_hunk();
+            continue;
+        }
+
+        if (key == NCKEY_F04 || ni.id == NCKEY_F04) {
+            if (show_git_hunk_popup) {
+                show_git_hunk_popup = false;
+            } else {
+                show_whichkey_popup = false;
+                open_git_hunk_popup();
+            }
+            continue;
+        }
+
+        if (key == NCKEY_F09 || ni.id == NCKEY_F09) {
+            show_settings_popup = !show_settings_popup;
+            if (show_settings_popup) {
+                show_git_hunk_popup = false;
+                show_whichkey_popup = false;
+            }
+            continue;
+        }
 
         if (key == NCKEY_F11 || ni.id == NCKEY_F11) {
             if (show_rg_popup) {

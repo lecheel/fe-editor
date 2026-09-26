@@ -41,6 +41,7 @@ private:
     bool show_whichkey_popup{false};
     std::chrono::steady_clock::time_point leader_start_time;
 
+    bool show_mini_help{false};
     bool show_filepicker{false};
     std::string filepicker_query;
     std::vector<std::string> filepicker_all_files;
@@ -113,6 +114,8 @@ private:
 
     void handle_whichkey_popup(const ncinput& ni, uint32_t key);
     void render_whichkey_popup(unsigned int screen_h, unsigned int screen_w);
+
+    void render_mini_help(unsigned int screen_h, unsigned int screen_w);
 
     void handle_settings_popup(const ncinput& ni, uint32_t key);
     void render_settings_popup(unsigned int screen_h, unsigned int screen_w);
