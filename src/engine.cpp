@@ -61,7 +61,14 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     restore_window_position(w, *buffers[0]);
     windows.push_back(w);
 
-    set_info_msg("[:] Command Mode | [v] Visual | [Ctrl-v] Block Mode | [Alt-s/v] Split | [Alt-q] Quit");
+    set_info_msg("[F9] Line Hunk Settings | [:] Command | [v] Visual | [Ctrl-v] Block | [Alt-s/v] Split");
+}
+
+int VimEngine::get_line_num_w(const TextBuffer& buf) const {
+    if (!config.settings.show_line_numbers) return 0;
+    if (config.settings.line_number_width > 0) return config.settings.line_number_width;
+    int digits = static_cast<int>(std::to_string(std::max(1UL, buf.lines.size())).size());
+    return std::max(3, digits + 2);
 }
 
 VimEngine::~VimEngine() {
@@ -695,8 +702,9 @@ void VimEngine::render() {
         auto& aw = active_win();
         if (!aw.cursors.empty()) {
             Cursor primary = aw.cursors.front();
+            int gutter_w = get_line_num_w(active_buf());
             int screen_cy = aw.y + (primary.y - aw.scroll_y);
-            int screen_cx = aw.x + LINE_NUM_W + primary.x;
+            int screen_cx = aw.x + gutter_w + primary.x;
             if (screen_cy >= aw.y && screen_cy < aw.y + aw.h &&
                 screen_cx >= aw.x && screen_cx < aw.x + aw.w) {
                 notcurses_cursor_enable(nc, screen_cy, screen_cx);
@@ -704,6 +712,11 @@ void VimEngine::render() {
                 notcurses_cursor_disable(nc);
             }
         }
+    }
+
+    if (show_settings_popup) {
+        render_settings_popup(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
     }
 
     notcurses_render(nc);
@@ -724,31 +737,50 @@ void VimEngine::render_window(Window& win, bool is_active) {
     int v_min_x = std::min(win.visual_anchor.x, primary.x);
     int v_max_x = std::max(win.visual_anchor.x, primary.x);
 
+    int gutter_w = get_line_num_w(buf);
+
     for (int r = 0; r < win.h; ++r) {
         int line_idx = win.scroll_y + r;
         int draw_y = win.y + r;
 
-        if (is_active) {
-            ncplane_set_fg_rgb8(stdplane, 80, 160, 200);
-        } else {
-            ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
-        }
-        ncplane_set_bg_rgb8(stdplane, 22, 22, 26);
+        if (gutter_w > 0) {
+            bool is_cursor_line = (line_idx == primary.y);
+            if (is_cursor_line && config.settings.highlight_current_line && is_active) {
+                ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+                ncplane_set_bg_rgb8(stdplane, 35, 38, 48);
+            } else if (is_active) {
+                ncplane_set_fg_rgb8(stdplane, 80, 160, 200);
+                ncplane_set_bg_rgb8(stdplane, 22, 22, 26);
+            } else {
+                ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
+                ncplane_set_bg_rgb8(stdplane, 22, 22, 26);
+            }
 
-        if (line_idx < static_cast<int>(buf.lines.size())) {
-            ncplane_printf_yx(stdplane, draw_y, win.x, "%3d ", line_idx + 1);
-        } else {
-            ncplane_putstr_yx(stdplane, draw_y, win.x, "  ~ ");
+            if (line_idx < static_cast<int>(buf.lines.size())) {
+                int disp_num = line_idx + 1;
+                if (config.settings.line_number_mode == LineNumberMode::RELATIVE) {
+                    disp_num = std::abs(line_idx - primary.y);
+                } else if (config.settings.line_number_mode == LineNumberMode::HYBRID) {
+                    disp_num = is_cursor_line ? (line_idx + 1) : std::abs(line_idx - primary.y);
+                }
+                std::string fmt = "%" + std::to_string(gutter_w - 1) + "d ";
+                ncplane_printf_yx(stdplane, draw_y, win.x, fmt.c_str(), disp_num);
+            } else {
+                std::string tilde;
+                for (int sp = 0; sp < std::max(0, gutter_w - 2); ++sp) tilde += " ";
+                tilde += "~ ";
+                ncplane_putstr_yx(stdplane, draw_y, win.x, tilde.c_str());
+            }
         }
 
-        int text_avail_w = win.w - LINE_NUM_W;
+        int text_avail_w = win.w - gutter_w;
         if (text_avail_w <= 0) continue;
 
         if (line_idx < static_cast<int>(buf.lines.size())) {
             const std::string& line = buf.lines[line_idx];
             for (int c = 0; c < text_avail_w; ++c) {
                 int char_idx = win.scroll_x + c;
-                int draw_x = win.x + LINE_NUM_W + c;
+                int draw_x = win.x + gutter_w + c;
 
                 bool has_cursor = cursor_set.count({line_idx, char_idx});
                 bool in_visual = false;
@@ -793,8 +825,150 @@ void VimEngine::render_window(Window& win, bool is_active) {
         } else {
             ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
             std::string empty(text_avail_w, ' ');
-            ncplane_putstr_yx(stdplane, draw_y, win.x + LINE_NUM_W, empty.c_str());
+            ncplane_putstr_yx(stdplane, draw_y, win.x + gutter_w, empty.c_str());
         }
+    }
+}
+
+void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
+    if (key == NCKEY_ESC || key == NCKEY_F09 || (ni.id == NCKEY_F09) || key == 'q' || key == 'Q') {
+        show_settings_popup = false;
+        config.save();
+        set_info_msg("Settings applied.");
+        return;
+    }
+
+    const int total_items = 4;
+    if (key == NCKEY_UP || key == 'k' || key == 'K') {
+        settings_selected_idx = (settings_selected_idx + total_items - 1) % total_items;
+    } else if (key == NCKEY_DOWN || key == 'j' || key == 'J') {
+        settings_selected_idx = (settings_selected_idx + 1) % total_items;
+    } else if (key == NCKEY_ENTER || key == '\n' || key == '\r' || key == ' ' ||
+               key == NCKEY_LEFT || key == NCKEY_RIGHT || key == 'h' || key == 'l') {
+        switch (settings_selected_idx) {
+            case 0:
+                config.settings.show_line_numbers = !config.settings.show_line_numbers;
+                break;
+            case 1: {
+                int m = static_cast<int>(config.settings.line_number_mode);
+                if (key == NCKEY_LEFT || key == 'h') {
+                    m = (m + 2) % 3;
+                } else {
+                    m = (m + 1) % 3;
+                }
+                config.settings.line_number_mode = static_cast<LineNumberMode>(m);
+                break;
+            }
+            case 2: {
+                if (key == NCKEY_LEFT || key == 'h') {
+                    if (config.settings.line_number_width == 0) config.settings.line_number_width = 8;
+                    else if (config.settings.line_number_width <= 3) config.settings.line_number_width = 0;
+                    else config.settings.line_number_width--;
+                } else {
+                    if (config.settings.line_number_width == 0) config.settings.line_number_width = 3;
+                    else if (config.settings.line_number_width >= 8) config.settings.line_number_width = 0;
+                    else config.settings.line_number_width++;
+                }
+                break;
+            }
+            case 3:
+                config.settings.highlight_current_line = !config.settings.highlight_current_line;
+                break;
+        }
+        config.save();
+    }
+}
+
+void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen_w) {
+    int popup_w = std::max(36, static_cast<int>(screen_w * 0.50));
+    popup_w = std::min(popup_w, static_cast<int>(screen_w) - 2);
+    int popup_h = 10;
+    int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
+    int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
+
+    // Draw panel background
+    ncplane_set_bg_rgb8(stdplane, 24, 26, 32);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    // Draw roundbox border
+    ncplane_set_fg_rgb8(stdplane, 90, 180, 240);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+
+    // Header Title
+    std::string title = " Line Number Hunk Settings (F9) ";
+    if (static_cast<int>(title.size()) < popup_w - 4) {
+        ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+    }
+
+    // Setting items
+    struct Item {
+        std::string label;
+        std::string value;
+    };
+
+    std::string mode_str = "Absolute";
+    if (config.settings.line_number_mode == LineNumberMode::RELATIVE) mode_str = "Relative";
+    else if (config.settings.line_number_mode == LineNumberMode::HYBRID) mode_str = "Hybrid";
+
+    std::string w_str = (config.settings.line_number_width == 0) ? "Auto" : std::to_string(config.settings.line_number_width);
+
+    std::vector<Item> items = {
+        {"Show Line Numbers", config.settings.show_line_numbers ? "[ ON ]" : "[ OFF ]"},
+        {"Line Number Style", "< " + mode_str + " >"},
+        {"Hunk/Gutter Width", "< " + w_str + " >"},
+        {"Highlight Active", config.settings.highlight_current_line ? "[ ON ]" : "[ OFF ]"}
+    };
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        int draw_y = popup_y + 2 + static_cast<int>(i);
+        bool is_sel = (static_cast<int>(i) == settings_selected_idx);
+
+        if (is_sel) {
+            ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+            ncplane_set_bg_rgb8(stdplane, 50, 75, 140);
+        } else {
+            ncplane_set_fg_rgb8(stdplane, 210, 210, 210);
+            ncplane_set_bg_rgb8(stdplane, 24, 26, 32);
+        }
+
+        std::string pointer = is_sel ? " ▶ " : "   ";
+        ncplane_putstr_yx(stdplane, draw_y, popup_x + 2, pointer.c_str());
+        ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, items[i].label.c_str());
+
+        int val_x = popup_x + popup_w - 2 - static_cast<int>(items[i].value.size());
+        if (val_x > popup_x + 24) {
+            if (is_sel) {
+                ncplane_set_fg_rgb8(stdplane, 255, 220, 80);
+            } else {
+                ncplane_set_fg_rgb8(stdplane, 130, 200, 255);
+            }
+            ncplane_putstr_yx(stdplane, draw_y, val_x, items[i].value.c_str());
+        }
+    }
+
+    // Bottom help tip
+    ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+    ncplane_set_bg_rgb8(stdplane, 24, 26, 32);
+    std::string help = "[▲/▼] Navigate  [Enter/Space/◀/▶] Toggle  [Esc/F9] Close";
+    if (static_cast<int>(help.size()) < popup_w - 4) {
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 2, popup_x + 2, help.c_str());
     }
 }
 
@@ -903,8 +1077,19 @@ void VimEngine::run() {
             continue;
         }
 
-    LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
-         key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
+        LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
+             key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
+
+        if (key == NCKEY_F09 || ni.id == NCKEY_F09) {
+            show_settings_popup = !show_settings_popup;
+            continue;
+        }
+
+        if (show_settings_popup) {
+            handle_settings_popup(ni, key);
+            continue;
+        }
+
         if (ni.alt && (ni.id == 'q' || ni.id == 'Q')) {
             break;
         }

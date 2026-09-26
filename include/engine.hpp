@@ -30,14 +30,18 @@ private:
     std::string info_msg;
     std::string cmd_buffer;
     int next_win_id{2};
-
-    static constexpr int LINE_NUM_W = 4;
+    bool show_settings_popup{false};
+    int settings_selected_idx{0};
 
     ConfigManager config;
 
+    int get_line_num_w(const TextBuffer& buf) const;
     void set_info_msg(std::string msg);
     Window& active_win();
     TextBuffer& active_buf();
+
+    void handle_settings_popup(const ncinput& ni, uint32_t key);
+    void render_settings_popup(unsigned int screen_h, unsigned int screen_w);
 
     void save_window_position(const Window& win, const TextBuffer& buf);
     void restore_window_position(Window& win, const TextBuffer& buf);
