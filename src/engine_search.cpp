@@ -883,11 +883,6 @@ void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
     // TAB: Toggle View mode vs Replace mode
     if (key == '\t' || key == NCKEY_TAB) {
         rg_replace_active = !rg_replace_active;
-        if (rg_replace_active) {
-            set_info_msg("Replace Mode: Type replacement text, [▲/▼] Navigate, [Space] Toggle Ignore, [Enter] Apply, [TAB] View Mode");
-        } else {
-            set_info_msg("View Mode: [j/k/▲/▼] Navigate, [Enter] Open, [TAB] Replace Mode");
-        }
         return;
     }
 
