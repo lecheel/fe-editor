@@ -1049,37 +1049,93 @@ void VimEngine::scan_project_files() {
     filepicker_all_files.clear();
     std::string root = !project_dir.empty() ? project_dir : ".";
 
-    std::error_code ec;
-    auto iter = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
-    auto end_iter = fs::recursive_directory_iterator();
+    bool used_git = false;
+    std::string test_git = "git -C \"" + root + "\" rev-parse --is-inside-work-tree 2>/dev/null";
+    FILE* g_fp = popen(test_git.c_str(), "r");
+    if (g_fp) {
+        char g_buf[16];
+        bool is_git = (fgets(g_buf, sizeof(g_buf), g_fp) != nullptr && std::string(g_buf).find("true") != std::string::npos);
+        pclose(g_fp);
 
-    for (; iter != end_iter && !ec; iter.increment(ec)) {
-        if (filepicker_all_files.size() >= 2500) break; // prevent lag on huge trees
-
-        const auto& path = iter->path();
-        std::string fn = path.filename().string();
-
-        if (iter->is_directory(ec)) {
-            if (fn.front() == '.' || fn == "node_modules" || fn == "build" ||
-                fn == "target" || fn == "bin" || fn == "obj" || fn == "dist") {
-                iter.disable_recursion_pending();
-            }
-            continue;
-        }
-
-        if (iter->is_regular_file(ec)) {
-            if (fn.front() == '.') continue;
-            std::string rel;
-            try {
-                rel = fs::relative(path, root, ec).string();
-            } catch (...) {
-                rel = fn;
-            }
-            if (!ec && !rel.empty()) {
-                filepicker_all_files.push_back(rel);
+        if (is_git) {
+            std::string ls_cmd = "git -C \"" + root + "\" ls-files --cached --others --exclude-standard 2>/dev/null";
+            FILE* ls_fp = popen(ls_cmd.c_str(), "r");
+            if (ls_fp) {
+                char f_buf[4096];
+                while (fgets(f_buf, sizeof(f_buf), ls_fp)) {
+                    std::string f(f_buf);
+                    while (!f.empty() && (f.back() == '\n' || f.back() == '\r')) f.pop_back();
+                    if (!f.empty()) {
+                        filepicker_all_files.push_back(f);
+                        if (filepicker_all_files.size() >= 5000) break;
+                    }
+                }
+                pclose(ls_fp);
+                used_git = true;
             }
         }
     }
+
+    if (!used_git) {
+        std::error_code ec;
+        auto iter = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+        auto end_iter = fs::recursive_directory_iterator();
+
+        const int MAX_NON_REPO_DEPTH = 3;
+        const size_t MAX_FILES = 500;
+        auto start_time = std::chrono::steady_clock::now();
+
+        for (; iter != end_iter && !ec; iter.increment(ec)) {
+            if (filepicker_all_files.size() >= MAX_FILES) break;
+
+            if ((filepicker_all_files.size() % 100) == 0) {
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count() > 100) {
+                    break;
+                }
+            }
+
+            if (iter.depth() >= MAX_NON_REPO_DEPTH) {
+                iter.disable_recursion_pending();
+            }
+
+            const auto& path = iter->path();
+            std::string fn = path.filename().string();
+
+            if (iter->is_symlink(ec)) {
+                if (iter->is_directory(ec)) {
+                    iter.disable_recursion_pending();
+                }
+                continue;
+            }
+
+            if (iter->is_directory(ec)) {
+                if (fn.front() == '.' || fn == "node_modules" || fn == "build" ||
+                    fn == "target" || fn == "bin" || fn == "obj" || fn == "dist" ||
+                    fn == "vendor" || fn == "venv" || fn == ".venv" || fn == "__pycache__" ||
+                    fn == "cache" || fn == ".cache" || fn == "tmp" || fn == "temp" ||
+                    fn == "proc" || fn == "sys" || fn == "dev" || fn == "run" ||
+                    fn == "var" || fn == "Library" || fn == "AppData") {
+                    iter.disable_recursion_pending();
+                }
+                continue;
+            }
+
+            if (iter->is_regular_file(ec)) {
+                if (fn.front() == '.') continue;
+                std::string rel;
+                try {
+                    rel = fs::relative(path, root, ec).string();
+                } catch (...) {
+                    rel = fn;
+                }
+                if (!ec && !rel.empty()) {
+                    filepicker_all_files.push_back(rel);
+                }
+            }
+        }
+    }
+
     std::sort(filepicker_all_files.begin(), filepicker_all_files.end());
 }
 
