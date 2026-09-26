@@ -3,6 +3,7 @@
 #include "buffer.hpp"
 #include "config.hpp"
 #include "window.hpp"
+#include "git.hpp"
 #include <notcurses/notcurses.h>
 #include <memory>
 #include <vector>

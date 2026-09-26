@@ -181,32 +181,7 @@ void VimEngine::scan_project_files() {
     filepicker_all_files.clear();
     std::string root = !project_dir.empty() ? project_dir : ".";
 
-    bool used_git = false;
-    std::string test_git = "git -C \"" + root + "\" rev-parse --is-inside-work-tree 2>/dev/null";
-    FILE* g_fp = popen(test_git.c_str(), "r");
-    if (g_fp) {
-        char g_buf[16];
-        bool is_git = (fgets(g_buf, sizeof(g_buf), g_fp) != nullptr && std::string(g_buf).find("true") != std::string::npos);
-        pclose(g_fp);
-
-        if (is_git) {
-            std::string ls_cmd = "git -C \"" + root + "\" ls-files --cached --others --exclude-standard 2>/dev/null";
-            FILE* ls_fp = popen(ls_cmd.c_str(), "r");
-            if (ls_fp) {
-                char f_buf[4096];
-                while (fgets(f_buf, sizeof(f_buf), ls_fp)) {
-                    std::string f(f_buf);
-                    while (!f.empty() && (f.back() == '\n' || f.back() == '\r')) f.pop_back();
-                    if (!f.empty()) {
-                        filepicker_all_files.push_back(f);
-                        if (filepicker_all_files.size() >= 5000) break;
-                    }
-                }
-                pclose(ls_fp);
-                used_git = true;
-            }
-        }
-    }
+    bool used_git = get_git_project_files(root, filepicker_all_files);
 
     if (!used_git) {
         std::error_code ec;

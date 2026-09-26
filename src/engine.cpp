@@ -44,35 +44,11 @@ namespace fs = std::filesystem;
 #endif
 
 std::string VimEngine::detect_project_dir(const std::string& start_path) {
-    std::string dir = start_path;
+    std::string toplevel = detect_git_repo_root(start_path);
+    if (!toplevel.empty()) {
+        return toplevel;
+    }
     std::error_code ec;
-    if (dir.empty()) {
-        dir = fs::current_path(ec).string();
-    } else {
-        fs::path p = fs::absolute(start_path, ec);
-        if (!ec) {
-            dir = fs::is_directory(p, ec) ? p.string() : p.parent_path().string();
-        }
-    }
-    if (dir.empty()) dir = ".";
-
-    std::string cmd = "git -C \"" + dir + "\" rev-parse --show-toplevel 2>/dev/null";
-    FILE* fp = popen(cmd.c_str(), "r");
-    if (fp) {
-        char buf[1024];
-        std::string toplevel;
-        if (fgets(buf, sizeof(buf), fp)) {
-            toplevel = buf;
-            while (!toplevel.empty() && (toplevel.back() == '\n' || toplevel.back() == '\r')) {
-                toplevel.pop_back();
-            }
-        }
-        int status = pclose(fp);
-        if (status == 0 && !toplevel.empty()) {
-            return toplevel;
-        }
-    }
-
     return fs::current_path(ec).string();
 }
 

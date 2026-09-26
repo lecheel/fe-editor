@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NOTCURSES REQUIRED IMPORTED_TARGET notcurses notcurses-core)
+pkg_check_modules(LIBGIT2 REQUIRED IMPORTED_TARGET libgit2)
 
 add_executable(fe
     main.cpp
@@ -24,4 +25,4 @@ add_executable(fe
 )
 
 target_include_directories(fe PRIVATE include)
-target_link_libraries(fe PRIVATE PkgConfig::NOTCURSES ${CMAKE_DL_LIBS})
+target_link_libraries(fe PRIVATE PkgConfig::NOTCURSES PkgConfig::LIBGIT2 ${CMAKE_DL_LIBS})
