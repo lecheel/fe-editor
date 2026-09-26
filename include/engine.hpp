@@ -48,6 +48,34 @@ private:
     int filepicker_selected_idx{0};
     int filepicker_scroll{0};
 
+    // Ripgrep grouped search state
+    struct RgMatch {
+        std::string file;
+        int line{1};
+        int col{1};
+        std::string text;
+    };
+    struct RgGroup {
+        std::string file;
+        std::vector<RgMatch> matches;
+    };
+    struct RgDisplayLine {
+        bool is_file_header{false};
+        std::string file;
+        int match_idx{-1}; // index in flattened matches if !is_file_header
+        int line{1};
+        int col{1};
+        std::string text;
+    };
+
+    bool show_rg_popup{false};
+    std::string rg_query;
+    std::vector<RgGroup> rg_groups;
+    std::vector<RgMatch> rg_flattened_matches;
+    std::vector<RgDisplayLine> rg_display_lines;
+    int rg_selected_match_idx{0};
+    int rg_scroll{0};
+
     std::string project_dir;
     std::string project_name;
 
@@ -72,6 +100,16 @@ private:
     void filter_filepicker_files();
     void handle_filepicker_input(const ncinput& ni, uint32_t key);
     void render_filepicker(unsigned int screen_h, unsigned int screen_w);
+
+    std::string get_word_under_cursor();
+    std::string get_rg_cache_path() const;
+    void run_ripgrep(const std::string& pattern);
+    void save_rg_cache();
+    void load_rg_cache();
+    void rebuild_rg_display_lines();
+    void open_selected_rg_match();
+    void handle_rg_popup_input(const ncinput& ni, uint32_t key);
+    void render_rg_popup(unsigned int screen_h, unsigned int screen_w);
 
     void handle_whichkey_popup(const ncinput& ni, uint32_t key);
     void render_whichkey_popup(unsigned int screen_h, unsigned int screen_w);
