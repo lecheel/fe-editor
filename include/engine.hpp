@@ -4,6 +4,7 @@
 #include "config.hpp"
 #include "window.hpp"
 #include "git.hpp"
+#include "command.hpp"
 #include <notcurses/notcurses.h>
 #include <memory>
 #include <vector>
@@ -90,6 +91,7 @@ private:
     static std::string detect_project_dir(const std::string& start_path = "");
 
     int get_line_num_w(const TextBuffer& buf) const;
+public:
     void set_info_msg(std::string msg);
     Window& active_win();
     TextBuffer& active_buf();

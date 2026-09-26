@@ -1,4 +1,5 @@
 #include "engine.hpp"
+#include "command.hpp"
 #include "log.hpp"
 #include <cmath>
 #include <iostream>
@@ -9,6 +10,19 @@
 #include <algorithm>
 
 namespace fs = std::filesystem;
+
+REGISTER_COMMAND(
+    minimap,
+    (std::vector<std::string>{"minimap", "mm"}),
+    "Toggle code minimap",
+    [](CommandContext& ctx) {
+        if (!ctx.argv.empty()) {
+            ctx.engine.set_info_msg("Minimap: " + ctx.args);
+        } else {
+            ctx.engine.set_info_msg("Minimap toggled.");
+        }
+    }
+);
 
 bool VimEngine::handle_navigation(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
@@ -356,6 +370,10 @@ void VimEngine::execute_command(const std::string& cmd_str) {
     iss >> cmd;
 
     if (cmd.empty()) return;
+
+    if (CommandRegistry::instance().execute(*this, cmd_str)) {
+        return;
+    }
 
     if (cmd == "q") {
         if (active_buf().modified) {
