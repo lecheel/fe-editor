@@ -733,8 +733,20 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (!ni.alt && key >= 32 && key != NCKEY_ESC) {
-        std::string ins = (ni.utf8[0] != '\0') ? reinterpret_cast<const char*>(ni.utf8) : std::string(1, static_cast<char>(key));
+    if (nckey_synthesized_p(key)) {
+        return;
+    }
+
+    if (!ni.alt && key != NCKEY_ESC) {
+        std::string ins;
+        if (ni.utf8[0] != '\0') {
+            ins = reinterpret_cast<const char*>(ni.utf8);
+        } else if (key >= 32 && key < 127) {
+            ins = std::string(1, static_cast<char>(key));
+        } else {
+            return;
+        }
+
         std::sort(win.cursors.begin(), win.cursors.end());
 
         std::map<int, std::vector<size_t>> line_cursor_map;
