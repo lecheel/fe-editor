@@ -167,6 +167,9 @@ std::vector<GitHunk> compute_myers_diff(const std::vector<std::string>& a, const
 TextBuffer::TextBuffer(std::string name, std::vector<std::string> initial_lines, std::string path)
     : name(std::move(name)), file_path(std::move(path)), lines(std::move(initial_lines)) {
     init_git_status();
+    syntax = std::make_shared<SyntaxHighlighter>();
+    syntax->init_for_file(!file_path.empty() ? file_path : name);
+    syntax->update_text(lines);
 }
 
 std::shared_ptr<TextBuffer> TextBuffer::from_file(const std::string& path) {
@@ -316,6 +319,7 @@ void TextBuffer::push_undo(const std::vector<Cursor>& cursors) {
     modified = true;
     version++;
     invalidate_hunks();
+    if (syntax) syntax->update_text(lines);
     if (undo_stack.size() > 100) {
         undo_stack.erase(undo_stack.begin());
     }
@@ -331,6 +335,7 @@ bool TextBuffer::undo(std::vector<Cursor>& cursors) {
     modified = true;
     version++;
     invalidate_hunks();
+    if (syntax) syntax->update_text(lines);
     return true;
 }
 
@@ -344,6 +349,7 @@ bool TextBuffer::redo(std::vector<Cursor>& cursors) {
     modified = true;
     version++;
     invalidate_hunks();
+    if (syntax) syntax->update_text(lines);
     return true;
 }
 
@@ -358,5 +364,9 @@ bool TextBuffer::save_to_file(const std::string& path_override) {
     name = target;
     modified = false;
     init_git_status();
+    if (syntax) {
+        syntax->init_for_file(target);
+        syntax->update_text(lines);
+    }
     return true;
 }

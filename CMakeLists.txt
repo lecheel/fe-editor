@@ -14,7 +14,8 @@ add_executable(fe
     src/config.cpp
     src/engine.cpp
     src/log.cpp
+    src/syntax.cpp
 )
 
 target_include_directories(fe PRIVATE include)
-target_link_libraries(fe PRIVATE PkgConfig::NOTCURSES)
+target_link_libraries(fe PRIVATE PkgConfig::NOTCURSES ${CMAKE_DL_LIBS})

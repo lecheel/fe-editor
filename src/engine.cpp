@@ -95,9 +95,10 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "",
             "// Visual Block: [Ctrl-v] start block, [I]/[A] multi-cursor insert, [d]/[x] delete block",
             "// Commands:     [:] enter command mode (:w, :q, :wq, :q!, :sp, :vsp, :b <n>)",
-            "// Navigation:   h/j/k/l, Arrows, PgUp, PgDown, Home, End",
-            "// Multi-Cursor: [C] Add below, [Alt-k] Add above, [Esc] Normal/Reset",
-            "// Splits:       [Alt-s] Horiz split, [Alt-v] Vert split, [Tab] Cycle win, [Alt-x] Close"
+        "// Navigation:   h/j/k/l, Arrows, PgUp, PgDown, Home, End",
+        "// Multi-Cursor: [C] Add below, [Alt-k] Add above, [Esc] Normal/Reset",
+        "// Insert Mode:  [Alt-u] Undo, [Alt-d] Delete line",
+        "// Splits:       [Alt-s] Horiz split, [Alt-v] Vert split, [Tab] Cycle win, [Alt-x] Close"
         }));
 
         buffers.push_back(std::make_shared<TextBuffer>("buffer-2.md", std::vector<std::string>{
@@ -404,6 +405,7 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
             buf.modified = true;
             buf.version++;
             buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
             mode = Mode::INSERT;
             break;
     }
@@ -521,6 +523,7 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
             buf.modified = true;
             buf.version++;
             buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
             mode = Mode::NORMAL;
             win.clamp_all_cursors(buf, mode);
             set_info_msg("Block deleted.");
@@ -680,6 +683,43 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
 
+    if (ni.alt && (ni.id == 'u' || ni.id == 'U' || key == 'u' || key == 'U')) {
+        if (buf.undo(win.cursors)) {
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Undo applied [Alt-u]. Undo states left: " + std::to_string(buf.undo_stack.size()));
+        } else {
+            set_info_msg("Already at oldest change.");
+        }
+        return;
+    }
+
+    if (ni.alt && (ni.id == 'd' || ni.id == 'D' || key == 'd' || key == 'D')) {
+        buf.push_undo(win.cursors);
+        std::set<int> lines_to_delete;
+        for (const auto& c : win.cursors) {
+            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                lines_to_delete.insert(c.y);
+            }
+        }
+        std::vector<int> sorted_lines(lines_to_delete.rbegin(), lines_to_delete.rend());
+        for (int y : sorted_lines) {
+            if (buf.lines.size() > 1) {
+                buf.lines.erase(buf.lines.begin() + y);
+            } else {
+                buf.lines[0] = "";
+            }
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        win.clamp_all_cursors(buf, mode);
+        win.deduplicate_cursors();
+        update_window_scroll(win, buf);
+        set_info_msg("Line deleted [Alt-d].");
+        return;
+    }
+
     if (handle_navigation(ni, key)) return;
 
     if (key == NCKEY_ESC) {
@@ -707,6 +747,7 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         buf.modified = true;
         buf.version++;
         buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
         win.deduplicate_cursors();
         return;
     }
@@ -722,11 +763,12 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         buf.modified = true;
         buf.version++;
         buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
         win.deduplicate_cursors();
         return;
     }
 
-    if (key >= 32 && key != NCKEY_ESC) {
+    if (!ni.alt && key >= 32 && key != NCKEY_ESC) {
         std::string ins = (ni.utf8[0] != '\0') ? reinterpret_cast<const char*>(ni.utf8) : std::string(1, static_cast<char>(key));
         std::sort(win.cursors.begin(), win.cursors.end());
 
@@ -752,6 +794,7 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         buf.modified = true;
         buf.version++;
         buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
         win.deduplicate_cursors();
     }
 }
@@ -1172,7 +1215,13 @@ void VimEngine::render_window(Window& win, bool is_active) {
         if (text_avail_w <= 0) continue;
 
         if (line_idx < static_cast<int>(buf.lines.size())) {
+        if (line_idx < static_cast<int>(buf.lines.size())) {
             const std::string& line = buf.lines[line_idx];
+            std::vector<SyntaxStyle> syn_styles;
+            if (buf.syntax) {
+                syn_styles = buf.syntax->get_line_styles(line_idx, line);
+            }
+
             for (int c = 0; c < text_avail_w; ++c) {
                 int char_idx = win.scroll_x + c;
                 int draw_x = win.x + gutter_w + c;
@@ -1203,7 +1252,11 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
                     ncplane_set_bg_rgb8(stdplane, 55, 75, 135);
                 } else {
-                    ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
+                    if (char_idx < static_cast<int>(syn_styles.size())) {
+                        ncplane_set_fg_rgb8(stdplane, syn_styles[char_idx].r, syn_styles[char_idx].g, syn_styles[char_idx].b);
+                    } else {
+                        ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
+                    }
                     ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
                 }
 
@@ -1217,6 +1270,7 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
                 }
             }
+        }
         } else {
             ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
             std::string empty(text_avail_w, ' ');
@@ -1417,8 +1471,9 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
     }
 
     char left_info[256];
-    snprintf(left_info, sizeof(left_info), " [%s] [Win %d/%zu] Buf (%zu/%zu): %s %s",
-             project_name.c_str(), win.id, windows.size(), win.buffer_idx + 1, buffers.size(),
+    std::string lang_tag = (buf.syntax && !buf.syntax->get_language().empty()) ? ("[" + buf.syntax->get_language() + "] ") : "";
+    snprintf(left_info, sizeof(left_info), " [%s] %s[Win %d/%zu] Buf (%zu/%zu): %s %s",
+             project_name.c_str(), lang_tag.c_str(), win.id, windows.size(), win.buffer_idx + 1, buffers.size(),
              display_name.c_str(), (buf.modified ? "[+]" : ""));
 
     char right_info[256];

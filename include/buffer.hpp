@@ -1,5 +1,6 @@
 #pragma once
 #include "types.hpp"
+#include "syntax.hpp"
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,6 +37,8 @@ public:
     mutable std::vector<GitHunk> cached_hunks;
     mutable size_t last_diff_version{static_cast<size_t>(-1)};
     mutable bool hunks_dirty{true};
+
+    std::shared_ptr<SyntaxHighlighter> syntax;
 
     TextBuffer(std::string name, std::vector<std::string> initial_lines, std::string path = "");
     static std::shared_ptr<TextBuffer> from_file(const std::string& path);
