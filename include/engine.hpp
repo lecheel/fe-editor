@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <chrono>
 
 class VimEngine {
 public:
@@ -36,6 +37,10 @@ private:
     bool show_git_hunk_popup{false};
     int active_hunk_idx{0};
 
+    bool leader_pending{false};
+    bool show_whichkey_popup{false};
+    std::chrono::steady_clock::time_point leader_start_time;
+
     std::string project_dir;
     std::string project_name;
 
@@ -54,6 +59,9 @@ private:
     void revert_active_hunk();
     void handle_git_hunk_popup(const ncinput& ni, uint32_t key);
     void render_git_hunk_popup(unsigned int screen_h, unsigned int screen_w);
+
+    void handle_whichkey_popup(const ncinput& ni, uint32_t key);
+    void render_whichkey_popup(unsigned int screen_h, unsigned int screen_w);
 
     void handle_settings_popup(const ncinput& ni, uint32_t key);
     void render_settings_popup(unsigned int screen_h, unsigned int screen_w);

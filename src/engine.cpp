@@ -117,7 +117,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     restore_window_position(w, *buffers[0]);
     windows.push_back(w);
 
-    set_info_msg("[F2/F3] Prev/Next Hunk | [F4] Hunk Diff | [F9] Settings | [:] Cmd | [v] Visual");
+    set_info_msg("[Space] Leader | [F2/F3] Hunks | [F4] Diff | [F9] Settings | [:] Cmd | [v] Visual");
 }
 
 int VimEngine::get_line_num_w(const TextBuffer& buf) const {
@@ -281,6 +281,13 @@ bool VimEngine::handle_navigation(const ncinput& ni, uint32_t key) {
 void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
+
+    if (key == ' ') {
+        leader_pending = true;
+        show_whichkey_popup = false;
+        leader_start_time = std::chrono::steady_clock::now();
+        return;
+    }
 
     if (key == 22 || (ni.ctrl && (ni.id == 'v' || ni.id == 'V'))) {
         mode = Mode::VISUAL_BLOCK;
@@ -942,6 +949,201 @@ void VimEngine::handle_git_hunk_popup(const ncinput& ni, uint32_t key) {
     }
 }
 
+void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
+    auto& win = active_win();
+    auto& buf = active_buf();
+
+    leader_pending = false;
+    show_whichkey_popup = false;
+
+    if (key == NCKEY_ESC || key == ' ') {
+        set_info_msg("");
+        return;
+    }
+
+    switch (key) {
+        case 'w':
+            if (buf.save_to_file("")) {
+                save_window_position(win, buf);
+                config.save();
+                set_info_msg("\"" + buf.name + "\" written");
+            } else {
+                set_info_msg("E212: Can't open file for writing");
+            }
+            break;
+        case 'q':
+            if (buf.modified) {
+                set_info_msg("E37: No write since last change (use :q! to override)");
+            } else {
+                save_all_positions();
+                config.save();
+                running = false;
+            }
+            break;
+        case 'x':
+            if (buf.save_to_file("")) {
+                save_all_positions();
+                config.save();
+                running = false;
+            } else {
+                set_info_msg("E212: Can't open file for writing");
+            }
+            break;
+        case 's':
+            split_window(SplitType::HORIZONTAL);
+            break;
+        case 'v':
+            split_window(SplitType::VERTICAL);
+            break;
+        case 'c':
+            close_active_window();
+            break;
+        case 'b':
+            save_window_position(win, buf);
+            win.buffer_idx = (win.buffer_idx + 1) % buffers.size();
+            restore_window_position(win, active_buf());
+            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+            break;
+        case 'B':
+            save_window_position(win, buf);
+            win.buffer_idx = (win.buffer_idx + buffers.size() - 1) % buffers.size();
+            restore_window_position(win, active_buf());
+            set_info_msg("Switched to Buffer [" + active_buf().name + "]");
+            break;
+        case 'h':
+            open_git_hunk_popup();
+            break;
+        case 'j':
+            jump_to_next_hunk();
+            break;
+        case 'k':
+            jump_to_prev_hunk();
+            break;
+        case 'l':
+            show_settings_popup = true;
+            break;
+        case 'u':
+            if (buf.undo(win.cursors)) {
+                win.clamp_all_cursors(buf, mode);
+                update_window_scroll(win, buf);
+                set_info_msg("Undo applied. Undo states left: " + std::to_string(buf.undo_stack.size()));
+            } else {
+                set_info_msg("Already at oldest change.");
+            }
+            break;
+        default:
+            if (key >= 32 && key < 127) {
+                set_info_msg("WhichKey: Unmapped shortcut [" + std::string(1, static_cast<char>(key)) + "]");
+            }
+            break;
+    }
+}
+
+void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen_w) {
+    struct WkItem {
+        std::string key;
+        std::string desc;
+    };
+
+    std::vector<WkItem> col1 = {
+        {"w", "Save Buffer"},
+        {"s", "Split Horiz"},
+        {"v", "Split Vert"},
+        {"c", "Close Window"},
+        {"b", "Next Buffer"},
+        {"u", "Undo"}
+    };
+
+    std::vector<WkItem> col2 = {
+        {"h", "Hunk Diff"},
+        {"j", "Next Hunk"},
+        {"k", "Prev Hunk"},
+        {"l", "Gutter Settings"},
+        {"q", "Quit"},
+        {"x", "Save & Quit"}
+    };
+
+    int popup_w = 44;
+    int popup_h = 9;
+
+    popup_w = std::min(popup_w, static_cast<int>(screen_w) - 2);
+    popup_h = std::min(popup_h, static_cast<int>(screen_h) - 3);
+
+    // Place popup in the right-bottom corner
+    int popup_x = static_cast<int>(screen_w) - popup_w - 1;
+    int popup_y = static_cast<int>(screen_h) - 2 - popup_h;
+
+    popup_x = std::max(0, popup_x);
+    popup_y = std::max(0, popup_y);
+
+    // Background fill
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    // Border (roundbox) in vibrant violet
+    ncplane_set_fg_rgb8(stdplane, 170, 115, 250);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+
+    // Header title
+    std::string title = " Leader [Space] ";
+    ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    int c1_x = popup_x + 2;
+    int c2_x = popup_x + (popup_w / 2) + 1;
+
+    for (size_t i = 0; i < 6 && (i + 1) < static_cast<size_t>(popup_h - 1); ++i) {
+        int draw_y = popup_y + 1 + static_cast<int>(i);
+
+        // Column 1
+        if (i < col1.size()) {
+            ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+            ncplane_set_fg_rgb8(stdplane, 100, 115, 135);
+            ncplane_putstr_yx(stdplane, draw_y, c1_x, "[");
+            ncplane_set_fg_rgb8(stdplane, 255, 200, 70);
+            ncplane_putstr_yx(stdplane, draw_y, c1_x + 1, col1[i].key.c_str());
+            ncplane_set_fg_rgb8(stdplane, 100, 115, 135);
+            ncplane_putstr_yx(stdplane, draw_y, c1_x + 2, "] ");
+            ncplane_set_fg_rgb8(stdplane, 220, 225, 235);
+            ncplane_putstr_yx(stdplane, draw_y, c1_x + 4, col1[i].desc.c_str());
+        }
+
+        // Column 2
+        if (i < col2.size() && c2_x < popup_x + popup_w - 5) {
+            ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+            ncplane_set_fg_rgb8(stdplane, 100, 115, 135);
+            ncplane_putstr_yx(stdplane, draw_y, c2_x, "[");
+            ncplane_set_fg_rgb8(stdplane, 255, 200, 70);
+            ncplane_putstr_yx(stdplane, draw_y, c2_x + 1, col2[i].key.c_str());
+            ncplane_set_fg_rgb8(stdplane, 100, 115, 135);
+            ncplane_putstr_yx(stdplane, draw_y, c2_x + 2, "] ");
+            ncplane_set_fg_rgb8(stdplane, 220, 225, 235);
+            ncplane_putstr_yx(stdplane, draw_y, c2_x + 4, col2[i].desc.c_str());
+        }
+    }
+
+    // Footer hint on bottom border
+    std::string footer = " [Esc] Close ";
+    ncplane_set_fg_rgb8(stdplane, 140, 145, 160);
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - static_cast<int>(footer.size()) - 2, footer.c_str());
+}
+
 void VimEngine::render_git_hunk_popup(unsigned int screen_h, unsigned int screen_w) {
     auto& buf = active_buf();
     const auto& hunks = buf.get_hunks();
@@ -1098,6 +1300,9 @@ void VimEngine::render() {
         notcurses_cursor_disable(nc);
     } else if (show_git_hunk_popup) {
         render_git_hunk_popup(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
+    } else if (show_whichkey_popup) {
+        render_whichkey_popup(screen_h, screen_w);
         notcurses_cursor_disable(nc);
     }
 
@@ -1542,7 +1747,33 @@ void VimEngine::run() {
         render();
 
         ncinput ni;
-        uint32_t key = notcurses_get(nc, nullptr, &ni);
+        uint32_t key = 0;
+
+        if (leader_pending && !show_whichkey_popup) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - leader_start_time).count();
+            int delay = config.settings.whichkey_delay_ms > 0 ? config.settings.whichkey_delay_ms : 300;
+
+            if (elapsed >= delay) {
+                show_whichkey_popup = true;
+                set_info_msg("WhichKey: [Space] Leader Menu");
+                continue;
+            } else {
+                int remain_ms = delay - static_cast<int>(elapsed);
+                struct timespec ts;
+                ts.tv_sec = remain_ms / 1000;
+                ts.tv_nsec = (remain_ms % 1000) * 1000000L;
+                key = notcurses_get(nc, &ts, &ni);
+                if (key == 0) {
+                    show_whichkey_popup = true;
+                    set_info_msg("WhichKey: [Space] Leader Menu");
+                    continue;
+                }
+            }
+        } else {
+            key = notcurses_get(nc, nullptr, &ni);
+        }
+
         if (key == (uint32_t)-1 || key == 0) {
             continue;
         }
@@ -1553,9 +1784,17 @@ void VimEngine::run() {
         LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
              key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
 
+        if (leader_pending) {
+            handle_whichkey_popup(ni, key);
+            continue;
+        }
+
         if (key == NCKEY_F09 || ni.id == NCKEY_F09) {
             show_settings_popup = !show_settings_popup;
-            if (show_settings_popup) show_git_hunk_popup = false;
+            if (show_settings_popup) {
+                show_git_hunk_popup = false;
+                show_whichkey_popup = false;
+            }
             continue;
         }
 
@@ -1578,6 +1817,7 @@ void VimEngine::run() {
             if (show_git_hunk_popup) {
                 show_git_hunk_popup = false;
             } else {
+                show_whichkey_popup = false;
                 open_git_hunk_popup();
             }
             continue;

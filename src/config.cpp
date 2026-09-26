@@ -119,6 +119,8 @@ void ConfigManager::load_json(const std::string& path) {
                             try { settings.line_number_width = std::stoi(v); } catch (...) {}
                         } else if (k == "highlight_current_line") {
                             settings.highlight_current_line = (v == "1" || v == "true");
+                        } else if (k == "whichkey_delay_ms") {
+                            try { settings.whichkey_delay_ms = std::stoi(v); } catch (...) {}
                         }
                     }
                     j++;
@@ -180,6 +182,7 @@ void ConfigManager::save_json(const std::string& path) {
     out << "  \"settings\": {\n";
     out << "    \"show_line_numbers\": " << (settings.show_line_numbers ? "1" : "0") << ",\n";
     out << "    \"line_number_mode\": " << static_cast<int>(settings.line_number_mode) << ",\n";
+    out << "    \"whichkey_delay_ms\": " << settings.whichkey_delay_ms << ",\n";
     out << "    \"line_number_width\": " << settings.line_number_width << ",\n";
     out << "    \"highlight_current_line\": " << (settings.highlight_current_line ? "1" : "0") << "\n";
     out << "  },\n";
