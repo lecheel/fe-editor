@@ -31,7 +31,7 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
         {"F8", "--"},
         {"F9", "Settings"},
         {"F10", "--"},
-        {"F11", "Recall Ripg"},
+        {"F11", "vg view"},
         {"F12", "Mini Help"}
     };
 
