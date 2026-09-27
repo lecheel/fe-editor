@@ -29,8 +29,18 @@ class ActionRegistry {
 public:
     static ActionRegistry& instance() {
         static ActionRegistry reg;
+        reg.ensure_init();
         return reg;
     }
+
+    void ensure_init() {
+        if (!initialized) {
+            initialized = true;
+            init_default_actions();
+        }
+    }
+
+    void init_default_actions();
 
     void register_action(const std::string& canonical_name,
                          const std::vector<std::string>& aliases,
@@ -49,6 +59,7 @@ public:
     }
 
     bool execute(const std::string& action_name, VimEngine& engine, Mode mode) {
+        ensure_init();
         auto it = alias_map.find(action_name);
         if (it == alias_map.end()) {
             return false;
@@ -57,15 +68,18 @@ public:
         return it->second->handler(ctx);
     }
 
-    const std::map<std::string, std::shared_ptr<ActionDef>>& get_canonical_actions() const {
+    const std::map<std::string, std::shared_ptr<ActionDef>>& get_canonical_actions() {
+        ensure_init();
         return canonical_map;
     }
 
-    const std::unordered_map<std::string, std::shared_ptr<ActionDef>>& get_all_aliases() const {
+    const std::unordered_map<std::string, std::shared_ptr<ActionDef>>& get_all_aliases() {
+        ensure_init();
         return alias_map;
     }
 
 private:
+    bool initialized{false};
     std::map<std::string, std::shared_ptr<ActionDef>> canonical_map;
     std::unordered_map<std::string, std::shared_ptr<ActionDef>> alias_map;
 };

@@ -159,240 +159,242 @@ void KeymapConfig::load(const std::string& config_dir) {
     }
 }
 
-REGISTER_ACTION(save, "save", (std::vector<std::string>{"write", "w"}), "File", "Save active buffer to disk",
-    [](ActionContext& ctx) {
-        if (ctx.engine.active_buf().save_to_file()) {
-            ctx.engine.save_window_position(ctx.engine.active_win(), ctx.engine.active_buf());
-            ctx.engine.get_config().save();
-            ctx.engine.set_info_msg("\"" + ctx.engine.active_buf().name + "\" written");
-        } else {
-            ctx.engine.set_info_msg("E212: Can't open file for writing");
-        }
-        return true;
-    }
-);
-
-REGISTER_ACTION(quit, "quit", (std::vector<std::string>{"q"}), "Window", "Quit editor",
-    [](ActionContext& ctx) {
-        ctx.engine.execute_command("q");
-        return true;
-    }
-);
-
-REGISTER_ACTION(undo, "undo", (std::vector<std::string>{"u"}), "Edit", "Undo last modification",
-    [](ActionContext& ctx) {
-        if (ctx.engine.active_buf().undo(ctx.engine.active_win().cursors)) {
-            ctx.engine.active_win().clamp_all_cursors(ctx.engine.active_buf(), ctx.mode);
-            ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
-            ctx.engine.set_info_msg("Undo applied.");
-        } else {
-            ctx.engine.set_info_msg("Already at oldest change.");
-        }
-        return true;
-    }
-);
-
-REGISTER_ACTION(redo, "redo", {}, "Edit", "Redo last undone modification",
-    [](ActionContext& ctx) {
-        if (ctx.engine.active_buf().redo(ctx.engine.active_win().cursors)) {
-            ctx.engine.active_win().clamp_all_cursors(ctx.engine.active_buf(), ctx.mode);
-            ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
-            ctx.engine.set_info_msg("Redo applied.");
-        } else {
-            ctx.engine.set_info_msg("Already at newest change.");
-        }
-        return true;
-    }
-);
-
-REGISTER_ACTION(filepicker, "filepicker", (std::vector<std::string>{"find_file", "picker"}), "Search", "Open file picker",
-    [](ActionContext& ctx) {
-        ctx.engine.open_filepicker();
-        return true;
-    }
-);
-
-REGISTER_ACTION(git_status, "git_status", (std::vector<std::string>{"git", "gitview", "gs"}), "Git", "Open git status view (F1/F6)",
-    [](ActionContext& ctx) {
-        ctx.engine.open_git_status();
-        return true;
-    }
-);
-
-REGISTER_ACTION(hunk_diff, "hunk_diff", (std::vector<std::string>{"diff", "delta"}), "Git", "Toggle side-by-side git hunk diff (F5)",
-    [](ActionContext& ctx) {
-        ctx.engine.open_hunk_diff();
-        return true;
-    }
-);
-
-REGISTER_ACTION(hunk_next, "hunk_next", {}, "Git", "Jump to next git hunk",
-    [](ActionContext& ctx) {
-        ctx.engine.jump_to_next_hunk();
-        return true;
-    }
-);
-
-REGISTER_ACTION(hunk_prev, "hunk_prev", {}, "Git", "Jump to previous git hunk",
-    [](ActionContext& ctx) {
-        ctx.engine.jump_to_prev_hunk();
-        return true;
-    }
-);
-
-REGISTER_ACTION(hunk_popup, "hunk_popup", {}, "Git", "Open git hunk diff popup (F4)",
-    [](ActionContext& ctx) {
-        ctx.engine.open_git_hunk_popup();
-        return true;
-    }
-);
-
-REGISTER_ACTION(revert_hunk, "revert_hunk", {}, "Git", "Revert active git hunk",
-    [](ActionContext& ctx) {
-        ctx.engine.revert_active_hunk();
-        return true;
-    }
-);
-
-REGISTER_ACTION(buffer_list, "buffer_list", (std::vector<std::string>{"buffers", "ls"}), "Buffer", "Open buffer list popup (Alt-b)",
-    [](ActionContext& ctx) {
-        ctx.engine.open_buffer_list();
-        return true;
-    }
-);
-
-REGISTER_ACTION(next_buffer, "next_buffer", (std::vector<std::string>{"bn"}), "Buffer", "Switch to next buffer",
-    [](ActionContext& ctx) {
-        ctx.engine.next_buffer();
-        return true;
-    }
-);
-
-REGISTER_ACTION(prev_buffer, "prev_buffer", (std::vector<std::string>{"bp"}), "Buffer", "Switch to previous buffer",
-    [](ActionContext& ctx) {
-        ctx.engine.prev_buffer();
-        return true;
-    }
-);
-
-REGISTER_ACTION(settings, "settings", {}, "View", "Open settings popup (F9)",
-    [](ActionContext& ctx) {
-        ctx.engine.handle_key_input(ncinput{}, NCKEY_F09);
-        return true;
-    }
-);
-
-REGISTER_ACTION(ripgrep, "ripgrep", (std::vector<std::string>{"grep", "vg"}), "Search", "Search project with ripgrep (F11)",
-    [](ActionContext& ctx) {
-        std::string w = ctx.engine.get_word_under_cursor();
-        if (!w.empty()) ctx.engine.run_ripgrep(w);
-        else ctx.engine.execute_command("vg");
-        return true;
-    }
-);
-
-REGISTER_ACTION(help, "help", {}, "View", "Toggle mini help overlay (F12)",
-    [](ActionContext& ctx) {
-        ctx.engine.handle_key_input(ncinput{}, NCKEY_F12);
-        return true;
-    }
-);
-
-REGISTER_ACTION(split_h, "split_h", (std::vector<std::string>{"split_horizontal", "sp"}), "Window", "Split window horizontally (Alt-s)",
-    [](ActionContext& ctx) {
-        ctx.engine.split_window(SplitType::HORIZONTAL);
-        return true;
-    }
-);
-
-REGISTER_ACTION(split_v, "split_v", (std::vector<std::string>{"split_vertical", "vsp"}), "Window", "Split window vertically (Alt-v)",
-    [](ActionContext& ctx) {
-        ctx.engine.split_window(SplitType::VERTICAL);
-        return true;
-    }
-);
-
-REGISTER_ACTION(close_window, "close_window", {}, "Window", "Close active split window (Alt-x)",
-    [](ActionContext& ctx) {
-        ctx.engine.close_active_window();
-        return true;
-    }
-);
-
-REGISTER_ACTION(indent, "indent", {}, "Edit", "Reindent entire buffer",
-    [](ActionContext& ctx) {
-        ctx.engine.execute_command("indent");
-        return true;
-    }
-);
-
-REGISTER_ACTION(line_start, "0", (std::vector<std::string>{"^", "<home>"}), "Navigation", "Move cursor to line start",
-    [](ActionContext& ctx) {
-        for (auto& c : ctx.engine.active_win().cursors) c.x = 0;
-        return true;
-    }
-);
-
-REGISTER_ACTION(line_end, "$", (std::vector<std::string>{"<end>"}), "Navigation", "Move cursor to line end",
-    [](ActionContext& ctx) {
-        for (auto& c : ctx.engine.active_win().cursors) {
-            c.x = ctx.engine.active_win().get_max_x(ctx.engine.active_buf(), c.y, ctx.mode);
-        }
-        return true;
-    }
-);
-
-REGISTER_ACTION(top_of_file, "gg", (std::vector<std::string>{"top"}), "Navigation", "Jump to top of file",
-    [](ActionContext& ctx) {
-        for (auto& c : ctx.engine.active_win().cursors) { c.y = 0; c.x = 0; }
-        ctx.engine.active_win().clamp_all_cursors(ctx.engine.active_buf(), ctx.mode);
-        ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
-        ctx.engine.set_info_msg("Top of file (gg)");
-        return true;
-    }
-);
-
-REGISTER_ACTION(end_of_file, "g", (std::vector<std::string>{"bottom"}), "Navigation", "Jump to end of file (G)",
-    [](ActionContext& ctx) {
-        int ly = std::max(0, static_cast<int>(ctx.engine.active_buf().lines.size()) - 1);
-        for (auto& c : ctx.engine.active_win().cursors) { c.y = ly; c.x = 0; }
-        ctx.engine.active_win().clamp_all_cursors(ctx.engine.active_buf(), ctx.mode);
-        ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
-        ctx.engine.set_info_msg("End of file (G)");
-        return true;
-    }
-);
-
-REGISTER_ACTION(delete_line, "delete_line", {}, "Edit", "Delete line at cursor",
-    [](ActionContext& ctx) {
-        auto& win = ctx.engine.active_win();
-        auto& buf = ctx.engine.active_buf();
-        buf.push_undo(win.cursors);
-        std::set<int> lines_to_delete;
-        for (const auto& c : win.cursors) {
-            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
-                lines_to_delete.insert(c.y);
-            }
-        }
-        std::vector<int> sorted_lines(lines_to_delete.rbegin(), lines_to_delete.rend());
-        for (int y : sorted_lines) {
-            if (buf.lines.size() > 1) {
-                buf.lines.erase(buf.lines.begin() + y);
+void ActionRegistry::init_default_actions() {
+    register_action("save", {"write", "w"}, "File", "Save active buffer to disk",
+        [](ActionContext& ctx) {
+            if (ctx.engine.active_buf().save_to_file()) {
+                ctx.engine.save_window_position(ctx.engine.active_win(), ctx.engine.active_buf());
+                ctx.engine.get_config().save();
+                ctx.engine.set_info_msg("\"" + ctx.engine.active_buf().name + "\" written");
             } else {
-                buf.lines[0] = "";
+                ctx.engine.set_info_msg("E212: Can't open file for writing");
             }
+            return true;
         }
-        buf.modified = true;
-        buf.version++;
-        buf.invalidate_hunks();
-        if (buf.syntax) buf.syntax->update_text(buf.lines);
-        win.clamp_all_cursors(buf, ctx.mode);
-        win.deduplicate_cursors();
-        ctx.engine.update_window_scroll(win, buf);
-        ctx.engine.set_info_msg("Line deleted.");
-        return true;
-    }
-);
+    );
+
+    register_action("quit", {"q"}, "Window", "Quit editor",
+        [](ActionContext& ctx) {
+            ctx.engine.execute_command("q");
+            return true;
+        }
+    );
+
+    register_action("undo", {"u"}, "Edit", "Undo last modification",
+        [](ActionContext& ctx) {
+            if (ctx.engine.active_buf().undo(ctx.engine.active_win().cursors)) {
+                ctx.engine.active_win().clamp_all_cursors(ctx.engine.active_buf(), ctx.mode);
+                ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
+                ctx.engine.set_info_msg("Undo applied.");
+            } else {
+                ctx.engine.set_info_msg("Already at oldest change.");
+            }
+            return true;
+        }
+    );
+
+    register_action("redo", {"U"}, "Edit", "Redo last undone modification",
+        [](ActionContext& ctx) {
+            if (ctx.engine.active_buf().redo(ctx.engine.active_win().cursors)) {
+                ctx.engine.active_win().clamp_all_cursors(ctx.engine.active_buf(), ctx.mode);
+                ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
+                ctx.engine.set_info_msg("Redo applied.");
+            } else {
+                ctx.engine.set_info_msg("Already at newest change.");
+            }
+            return true;
+        }
+    );
+
+    register_action("filepicker", {"find_file", "picker"}, "Search", "Open file picker",
+        [](ActionContext& ctx) {
+            ctx.engine.open_filepicker();
+            return true;
+        }
+    );
+
+    register_action("git_status", {"git", "gitview", "gs"}, "Git", "Open git status view (F1/F6)",
+        [](ActionContext& ctx) {
+            ctx.engine.open_git_status();
+            return true;
+        }
+    );
+
+    register_action("hunk_diff", {"diff", "delta"}, "Git", "Toggle side-by-side git hunk diff (F5)",
+        [](ActionContext& ctx) {
+            ctx.engine.open_hunk_diff();
+            return true;
+        }
+    );
+
+    register_action("hunk_next", {"next_hunk"}, "Git", "Jump to next git hunk",
+        [](ActionContext& ctx) {
+            ctx.engine.jump_to_next_hunk();
+            return true;
+        }
+    );
+
+    register_action("hunk_prev", {"prev_hunk"}, "Git", "Jump to previous git hunk",
+        [](ActionContext& ctx) {
+            ctx.engine.jump_to_prev_hunk();
+            return true;
+        }
+    );
+
+    register_action("hunk_popup", {}, "Git", "Open git hunk diff popup (F4)",
+        [](ActionContext& ctx) {
+            ctx.engine.open_git_hunk_popup();
+            return true;
+        }
+    );
+
+    register_action("revert_hunk", {}, "Git", "Revert active git hunk",
+        [](ActionContext& ctx) {
+            ctx.engine.revert_active_hunk();
+            return true;
+        }
+    );
+
+    register_action("buffer_list", {"buffers", "ls"}, "Buffer", "Open buffer list popup (Alt-b)",
+        [](ActionContext& ctx) {
+            ctx.engine.open_buffer_list();
+            return true;
+        }
+    );
+
+    register_action("next_buffer", {"bn"}, "Buffer", "Switch to next buffer",
+        [](ActionContext& ctx) {
+            ctx.engine.next_buffer();
+            return true;
+        }
+    );
+
+    register_action("prev_buffer", {"bp"}, "Buffer", "Switch to previous buffer",
+        [](ActionContext& ctx) {
+            ctx.engine.prev_buffer();
+            return true;
+        }
+    );
+
+    register_action("settings", {"options"}, "View", "Open settings popup (F9)",
+        [](ActionContext& ctx) {
+            ctx.engine.handle_key_input(ncinput{}, NCKEY_F09);
+            return true;
+        }
+    );
+
+    register_action("ripgrep", {"grep", "vg"}, "Search", "Search project with ripgrep (F11)",
+        [](ActionContext& ctx) {
+            std::string w = ctx.engine.get_word_under_cursor();
+            if (!w.empty()) ctx.engine.run_ripgrep(w);
+            else ctx.engine.execute_command("vg");
+            return true;
+        }
+    );
+
+    register_action("help", {}, "View", "Toggle mini help overlay (F12)",
+        [](ActionContext& ctx) {
+            ctx.engine.handle_key_input(ncinput{}, NCKEY_F12);
+            return true;
+        }
+    );
+
+    register_action("split_h", {"split_horizontal", "sp"}, "Window", "Split window horizontally (Alt-s)",
+        [](ActionContext& ctx) {
+            ctx.engine.split_window(SplitType::HORIZONTAL);
+            return true;
+        }
+    );
+
+    register_action("split_v", {"split_vertical", "vsp"}, "Window", "Split window vertically (Alt-v)",
+        [](ActionContext& ctx) {
+            ctx.engine.split_window(SplitType::VERTICAL);
+            return true;
+        }
+    );
+
+    register_action("close_window", {}, "Window", "Close active split window (Alt-x)",
+        [](ActionContext& ctx) {
+            ctx.engine.close_active_window();
+            return true;
+        }
+    );
+
+    register_action("indent", {}, "Edit", "Reindent entire buffer",
+        [](ActionContext& ctx) {
+            ctx.engine.execute_command("indent");
+            return true;
+        }
+    );
+
+    register_action("line_start", {"0", "^", "<home>"}, "Navigation", "Move cursor to line start",
+        [](ActionContext& ctx) {
+            for (auto& c : ctx.engine.active_win().cursors) c.x = 0;
+            return true;
+        }
+    );
+
+    register_action("line_end", {"$", "<end>"}, "Navigation", "Move cursor to line end",
+        [](ActionContext& ctx) {
+            for (auto& c : ctx.engine.active_win().cursors) {
+                c.x = ctx.engine.active_win().get_max_x(ctx.engine.active_buf(), c.y, ctx.mode);
+            }
+            return true;
+        }
+    );
+
+    register_action("top_of_file", {"top", "gg"}, "Navigation", "Jump to top of file (gg)",
+        [](ActionContext& ctx) {
+            for (auto& c : ctx.engine.active_win().cursors) { c.y = 0; c.x = 0; }
+            ctx.engine.active_win().clamp_all_cursors(ctx.engine.active_buf(), ctx.mode);
+            ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
+            ctx.engine.set_info_msg("Top of file (gg)");
+            return true;
+        }
+    );
+
+    register_action("end_of_file", {"bottom", "g", "G"}, "Navigation", "Jump to end of file (G)",
+        [](ActionContext& ctx) {
+            int ly = std::max(0, static_cast<int>(ctx.engine.active_buf().lines.size()) - 1);
+            for (auto& c : ctx.engine.active_win().cursors) { c.y = ly; c.x = 0; }
+            ctx.engine.active_win().clamp_all_cursors(ctx.engine.active_buf(), ctx.mode);
+            ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
+            ctx.engine.set_info_msg("End of file (G)");
+            return true;
+        }
+    );
+
+    register_action("delete_line", {}, "Edit", "Delete line at cursor",
+        [](ActionContext& ctx) {
+            auto& win = ctx.engine.active_win();
+            auto& buf = ctx.engine.active_buf();
+            buf.push_undo(win.cursors);
+            std::set<int> lines_to_delete;
+            for (const auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    lines_to_delete.insert(c.y);
+                }
+            }
+            std::vector<int> sorted_lines(lines_to_delete.rbegin(), lines_to_delete.rend());
+            for (int y : sorted_lines) {
+                if (buf.lines.size() > 1) {
+                    buf.lines.erase(buf.lines.begin() + y);
+                } else {
+                    buf.lines[0] = "";
+                }
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            win.clamp_all_cursors(buf, ctx.mode);
+            win.deduplicate_cursors();
+            ctx.engine.update_window_scroll(win, buf);
+            ctx.engine.set_info_msg("Line deleted.");
+            return true;
+        }
+    );
+}
 
 bool KeymapConfig::execute_action(VimEngine& engine, Mode mode, const std::string& action) {
     if (action.empty()) return false;
