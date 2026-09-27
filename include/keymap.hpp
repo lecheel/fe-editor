@@ -3,6 +3,7 @@
 #include <notcurses/notcurses.h>
 #include <cstdint>
 #include <cctype>
+#include <string>
 
 #ifndef NCKEY_F02
 #define NCKEY_F02 (NCKEY_F01 + 1)
@@ -78,6 +79,68 @@ inline bool is_colon(const ncinput& ni, uint32_t key) {
            (ni.shift && (key == ';' || ni.id == ';'));
 }
 
+inline char get_shifted_ascii(char ch) {
+    switch (ch) {
+        case '1': return '!';
+        case '2': return '@';
+        case '3': return '#';
+        case '4': return '$';
+        case '5': return '%';
+        case '6': return '^';
+        case '7': return '&';
+        case '8': return '*';
+        case '9': return '(';
+        case '0': return ')';
+        case '-': return '_';
+        case '=': return '+';
+        case ';': return ':';
+        case '\'': return '"';
+        case ',': return '<';
+        case '.': return '>';
+        case '/': return '?';
+        case '`': return '~';
+        case '[': return '{';
+        case ']': return '}';
+        case '\\': return '|';
+        default:
+            if (ch >= 'a' && ch <= 'z') {
+                return static_cast<char>(ch - 'a' + 'A');
+            }
+            return ch;
+    }
+}
+
+inline std::string get_input_text(const ncinput& ni, uint32_t key) {
+    if (ni.ctrl || ni.alt) return "";
+
+    // 1. Check utf8 representation
+    if (ni.utf8[0] != '\0') {
+        unsigned char u0 = static_cast<unsigned char>(ni.utf8[0]);
+        if (u0 >= 128) {
+            return std::string(reinterpret_cast<const char*>(ni.utf8));
+        }
+        char c = ni.utf8[0];
+        if (ni.shift) {
+            c = get_shifted_ascii(c);
+        }
+        if (c >= 32 && c <= 126) {
+            return std::string(1, c);
+        }
+    }
+
+    // 2. Fallback to key or ni.id
+    uint32_t raw = (key >= 32 && key < 127) ? key : ni.id;
+    if (raw >= 32 && raw <= 126) {
+        char c = static_cast<char>(raw);
+        if (ni.shift) {
+            c = get_shifted_ascii(c);
+        }
+        return std::string(1, c);
+    }
+
+    return "";
+}
+
 inline std::string key_to_string(const ncinput& ni, uint32_t key) {
     if (is_fkey(ni, key, 1)) return "<F1>";
     if (is_fkey(ni, key, 2)) return "<F2>";
@@ -135,11 +198,9 @@ inline std::string key_to_string(const ncinput& ni, uint32_t key) {
         return std::string("<C-") + ch + ">";
     }
 
-    if (ni.utf8[0] != '\0' && ni.utf8[1] == '\0') {
-        return std::string(1, ni.utf8[0]);
-    }
-    if (key >= 32 && key < 127) {
-        return std::string(1, static_cast<char>(key));
+    if (!ni.alt && !ni.ctrl) {
+        std::string txt = get_input_text(ni, key);
+        if (!txt.empty()) return txt;
     }
 
     return "";

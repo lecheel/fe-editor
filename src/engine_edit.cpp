@@ -3536,13 +3536,8 @@ void VimEngine::handle_cmd_completion_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (!nckey_synthesized_p(key) && !ni.alt && !ni.ctrl) {
-        std::string ch;
-        if (ni.utf8[0] != '\0') {
-            ch = reinterpret_cast<const char*>(ni.utf8);
-        } else if (key >= 32 && key < 127) {
-            ch = std::string(1, static_cast<char>(key));
-        }
+    if (!ni.alt && !ni.ctrl) {
+        std::string ch = Keymap::get_input_text(ni, key);
         if (!ch.empty()) {
             cmd_buffer += ch;
             if (cmd_buffer.size() >= cmd_completion_base_cmd.size()) {
@@ -3739,13 +3734,8 @@ void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
     }
 
     // Printable character insertion at cursor
-    if (!nckey_synthesized_p(key) && !ni.ctrl && !ni.alt) {
-        std::string ins;
-        if (ni.utf8[0] != '\0') {
-            ins = reinterpret_cast<const char*>(ni.utf8);
-        } else if (key >= 32 && key < 127) {
-            ins = std::string(1, static_cast<char>(key));
-        }
+    if (!ni.ctrl && !ni.alt) {
+        std::string ins = Keymap::get_input_text(ni, key);
         if (!ins.empty()) {
             cmd_buffer.insert(cmd_cursor_pos, ins);
             cmd_cursor_pos += static_cast<int>(ins.size());
@@ -4296,14 +4286,8 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
     }
 
     if (!ni.alt && key != NCKEY_ESC) {
-        std::string ins;
-        if (ni.utf8[0] != '\0') {
-            ins = reinterpret_cast<const char*>(ni.utf8);
-        } else if (key >= 32 && key < 127) {
-            ins = std::string(1, static_cast<char>(key));
-        } else {
-            return;
-        }
+        std::string ins = Keymap::get_input_text(ni, key);
+        if (ins.empty()) return;
 
         std::sort(win.cursors.begin(), win.cursors.end());
 
