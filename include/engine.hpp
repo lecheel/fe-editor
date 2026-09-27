@@ -42,6 +42,12 @@ private:
 
     std::string info_msg;
     std::string cmd_buffer;
+    int cmd_cursor_pos{0};
+    std::vector<std::string> cmd_history;
+    int cmd_history_idx{-1};
+    std::string cmd_history_draft;
+    void load_cmd_history();
+    void save_cmd_history();
     int next_win_id{2};
     bool show_settings_popup{false};
     int settings_selected_idx{0};

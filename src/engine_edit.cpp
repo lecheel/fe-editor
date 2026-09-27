@@ -2686,6 +2686,9 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         LOGD("Entering COMMAND mode (key=%u id=%u utf8=%02x %02x shift=%d)", key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.shift);
         mode = Mode::COMMAND;
         cmd_buffer.clear();
+        cmd_cursor_pos = 0;
+        cmd_history_idx = -1;
+        cmd_history_draft.clear();
         return;
     }
 
@@ -3005,6 +3008,9 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
         (ni.shift && (key == ';' || ni.id == ';'))) {
         mode = Mode::COMMAND;
         cmd_buffer.clear();
+        cmd_cursor_pos = 0;
+        cmd_history_idx = -1;
+        cmd_history_draft.clear();
         return;
     }
 
@@ -3392,6 +3398,7 @@ void VimEngine::update_cmd_completion_preview() {
         return;
     }
     cmd_buffer = cmd_completion_base_cmd + cmd_completion_candidates[cmd_completion_selected_idx];
+    cmd_cursor_pos = static_cast<int>(cmd_buffer.size());
 }
 
 void VimEngine::close_cmd_completion() {
@@ -3401,6 +3408,7 @@ void VimEngine::close_cmd_completion() {
     cmd_completion_base_cmd.clear();
     cmd_completion_selected_idx = 0;
     cmd_completion_scroll_row = 0;
+    cmd_cursor_pos = static_cast<int>(cmd_buffer.size());
 }
 
 void VimEngine::handle_cmd_completion_input(const ncinput& ni, uint32_t key) {
@@ -3555,50 +3563,193 @@ void VimEngine::handle_cmd_completion_input(const ncinput& ni, uint32_t key) {
 
 void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
     AutocompleteState::instance().reset();
-    LOGD("handle_command_mode key=%u id=%u utf8=%02x %02x cmd_buffer='%s'",
-         key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], cmd_buffer.c_str());
+    LOGD("handle_command_mode key=%u id=%u utf8=%02x %02x cmd_buffer='%s' pos=%d",
+         key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], cmd_buffer.c_str(), cmd_cursor_pos);
 
     if (show_cmd_completion) {
         handle_cmd_completion_input(ni, key);
         return;
     }
 
-    if (key == NCKEY_ESC) {
+    cmd_cursor_pos = std::clamp(cmd_cursor_pos, 0, static_cast<int>(cmd_buffer.size()));
+
+    // Cancel command mode: Esc or Ctrl-C
+    if (key == NCKEY_ESC || is_ctrl(ni, key, 'c')) {
         mode = Mode::NORMAL;
         cmd_buffer.clear();
+        cmd_cursor_pos = 0;
+        cmd_history_idx = -1;
+        cmd_history_draft.clear();
         set_info_msg("");
         return;
     }
 
+    // Trigger completion
     if (key == '\t' || key == NCKEY_TAB) {
         trigger_cmd_completion();
         return;
     }
 
+    // Execute command on Enter
     if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
         close_cmd_completion();
-        execute_command(cmd_buffer);
+        std::string to_exec = cmd_buffer;
+        if (!to_exec.empty()) {
+            if (cmd_history.empty() || cmd_history.back() != to_exec) {
+                cmd_history.push_back(to_exec);
+                save_cmd_history();
+            }
+        }
+        cmd_history_idx = -1;
+        cmd_history_draft.clear();
         cmd_buffer.clear();
+        cmd_cursor_pos = 0;
         mode = Mode::NORMAL;
+        execute_command(to_exec);
         return;
     }
 
-    if (key == NCKEY_BACKSPACE || key == 127 || key == '\b') {
-        if (!cmd_buffer.empty()) {
-            cmd_buffer.pop_back();
-        } else {
+    // History navigation: Up / Ctrl-P (older)
+    if (key == NCKEY_UP || is_ctrl(ni, key, 'p')) {
+        if (!cmd_history.empty()) {
+            if (cmd_history_idx == -1) {
+                cmd_history_draft = cmd_buffer;
+                cmd_history_idx = static_cast<int>(cmd_history.size()) - 1;
+            } else if (cmd_history_idx > 0) {
+                cmd_history_idx--;
+            }
+            cmd_buffer = cmd_history[cmd_history_idx];
+            cmd_cursor_pos = static_cast<int>(cmd_buffer.size());
+        }
+        return;
+    }
+
+    // History navigation: Down / Ctrl-N (newer)
+    if (key == NCKEY_DOWN || is_ctrl(ni, key, 'n')) {
+        if (cmd_history_idx != -1) {
+            if (cmd_history_idx + 1 < static_cast<int>(cmd_history.size())) {
+                cmd_history_idx++;
+                cmd_buffer = cmd_history[cmd_history_idx];
+            } else {
+                cmd_history_idx = -1;
+                cmd_buffer = cmd_history_draft;
+            }
+            cmd_cursor_pos = static_cast<int>(cmd_buffer.size());
+        }
+        return;
+    }
+
+    // Start of line: Ctrl-A / Home
+    if (key == NCKEY_HOME || is_ctrl(ni, key, 'a')) {
+        cmd_cursor_pos = 0;
+        return;
+    }
+
+    // End of line: Ctrl-E / End
+    if (key == NCKEY_END || is_ctrl(ni, key, 'e')) {
+        cmd_cursor_pos = static_cast<int>(cmd_buffer.size());
+        return;
+    }
+
+    // Move left 1 character: Left arrow / Ctrl-B
+    if (key == NCKEY_LEFT || is_ctrl(ni, key, 'b')) {
+        if (cmd_cursor_pos > 0) cmd_cursor_pos--;
+        return;
+    }
+
+    // Move right 1 character: Right arrow / Ctrl-F
+    if (key == NCKEY_RIGHT || is_ctrl(ni, key, 'f')) {
+        if (cmd_cursor_pos < static_cast<int>(cmd_buffer.size())) cmd_cursor_pos++;
+        return;
+    }
+
+    // Word backward: Alt-B
+    if (is_alt(ni, key, 'b')) {
+        while (cmd_cursor_pos > 0 && std::isspace(static_cast<unsigned char>(cmd_buffer[cmd_cursor_pos - 1]))) {
+            cmd_cursor_pos--;
+        }
+        while (cmd_cursor_pos > 0 && !std::isspace(static_cast<unsigned char>(cmd_buffer[cmd_cursor_pos - 1]))) {
+            cmd_cursor_pos--;
+        }
+        return;
+    }
+
+    // Word forward: Alt-F
+    if (is_alt(ni, key, 'f')) {
+        int len = static_cast<int>(cmd_buffer.size());
+        while (cmd_cursor_pos < len && !std::isspace(static_cast<unsigned char>(cmd_buffer[cmd_cursor_pos]))) {
+            cmd_cursor_pos++;
+        }
+        while (cmd_cursor_pos < len && std::isspace(static_cast<unsigned char>(cmd_buffer[cmd_cursor_pos]))) {
+            cmd_cursor_pos++;
+        }
+        return;
+    }
+
+    // Backspace: delete character before cursor (or exit if empty)
+    if (key == NCKEY_BACKSPACE || key == 127 || key == '\b' || is_ctrl(ni, key, 'h')) {
+        if (cmd_cursor_pos > 0) {
+            cmd_buffer.erase(cmd_cursor_pos - 1, 1);
+            cmd_cursor_pos--;
+        } else if (cmd_buffer.empty()) {
             mode = Mode::NORMAL;
             set_info_msg("");
         }
         return;
     }
 
-    // Ignore synthesized non-printable keys (like arrows/F-keys)
-    if (!nckey_synthesized_p(key)) {
+    // Delete character under cursor: Delete / Ctrl-D
+    if (key == NCKEY_DEL || is_ctrl(ni, key, 'd')) {
+        if (cmd_cursor_pos < static_cast<int>(cmd_buffer.size())) {
+            cmd_buffer.erase(cmd_cursor_pos, 1);
+        } else if (cmd_buffer.empty() && is_ctrl(ni, key, 'd')) {
+            mode = Mode::NORMAL;
+            set_info_msg("");
+        }
+        return;
+    }
+
+    // Kill to start of line: Ctrl-U
+    if (is_ctrl(ni, key, 'u')) {
+        if (cmd_cursor_pos > 0) {
+            cmd_buffer.erase(0, cmd_cursor_pos);
+            cmd_cursor_pos = 0;
+        }
+        return;
+    }
+
+    // Kill to end of line: Ctrl-K
+    if (is_ctrl(ni, key, 'k')) {
+        if (cmd_cursor_pos < static_cast<int>(cmd_buffer.size())) {
+            cmd_buffer.erase(cmd_cursor_pos);
+        }
+        return;
+    }
+
+    // Kill previous word: Ctrl-W
+    if (is_ctrl(ni, key, 'w')) {
+        if (cmd_cursor_pos > 0) {
+            int p = cmd_cursor_pos;
+            while (p > 0 && std::isspace(static_cast<unsigned char>(cmd_buffer[p - 1]))) p--;
+            while (p > 0 && !std::isspace(static_cast<unsigned char>(cmd_buffer[p - 1]))) p--;
+            cmd_buffer.erase(p, cmd_cursor_pos - p);
+            cmd_cursor_pos = p;
+        }
+        return;
+    }
+
+    // Printable character insertion at cursor
+    if (!nckey_synthesized_p(key) && !ni.ctrl && !ni.alt) {
+        std::string ins;
         if (ni.utf8[0] != '\0') {
-            cmd_buffer += reinterpret_cast<const char*>(ni.utf8);
+            ins = reinterpret_cast<const char*>(ni.utf8);
         } else if (key >= 32 && key < 127) {
-            cmd_buffer += static_cast<char>(key);
+            ins = std::string(1, static_cast<char>(key));
+        }
+        if (!ins.empty()) {
+            cmd_buffer.insert(cmd_cursor_pos, ins);
+            cmd_cursor_pos += static_cast<int>(ins.size());
+            return;
         }
     }
 }

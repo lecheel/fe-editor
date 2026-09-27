@@ -342,6 +342,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     windows.push_back(w);
 
     load_rg_cache();
+    load_cmd_history();
 
     if (delta_mode) {
         if (buffers.size() >= 2) {
@@ -375,8 +376,38 @@ int VimEngine::get_line_num_w(const TextBuffer& buf) const {
     return std::max(4, digits + 2);
 }
 
+void VimEngine::load_cmd_history() {
+    std::string path = (fs::path(config.get_config_dir()) / "cmd_history").string();
+    std::ifstream in(path);
+    if (!in.is_open()) return;
+    cmd_history.clear();
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) {
+            cmd_history.push_back(line);
+        }
+    }
+    if (cmd_history.size() > 500) {
+        cmd_history.erase(cmd_history.begin(), cmd_history.begin() + (cmd_history.size() - 500));
+    }
+}
+
+void VimEngine::save_cmd_history() {
+    std::string path = (fs::path(config.get_config_dir()) / "cmd_history").string();
+    std::error_code ec;
+    fs::create_directories(config.get_config_dir(), ec);
+    std::ofstream out(path);
+    if (!out.is_open()) return;
+    size_t start = (cmd_history.size() > 500) ? (cmd_history.size() - 500) : 0;
+    for (size_t i = start; i < cmd_history.size(); ++i) {
+        out << cmd_history[i] << "\n";
+    }
+}
+
 VimEngine::~VimEngine() {
     save_all_positions();
+    save_cmd_history();
     config.save();
     LOGD("VimEngine shutting down");
     if (nc) notcurses_stop(nc);

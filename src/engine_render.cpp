@@ -56,7 +56,12 @@ void VimEngine::render() {
 
     // Enable and position hardware terminal cursor
     if (mode == Mode::COMMAND) {
-        int cursor_x = std::min(static_cast<int>(screen_w) - 1, 1 + static_cast<int>(cmd_buffer.size()));
+        int avail_w = std::max(1, static_cast<int>(screen_w) - 1);
+        int view_start = 0;
+        if (cmd_cursor_pos >= avail_w) {
+            view_start = cmd_cursor_pos - avail_w + 1;
+        }
+        int cursor_x = std::clamp(1 + (cmd_cursor_pos - view_start), 1, static_cast<int>(screen_w) - 1);
         notcurses_cursor_enable(nc, screen_h - 1, cursor_x);
     } else {
         auto& aw = active_win();

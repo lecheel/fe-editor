@@ -1143,10 +1143,16 @@ void VimEngine::render_info_bar(int y, unsigned int screen_w) {
         ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
         ncplane_putstr_yx(stdplane, y, 0, ":");
 
-        // Command text typed by user
+        int avail_w = std::max(1, static_cast<int>(screen_w) - 1);
+        int view_start = 0;
+        if (cmd_cursor_pos >= avail_w) {
+            view_start = cmd_cursor_pos - avail_w + 1;
+        }
+
         ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-        if (!cmd_buffer.empty()) {
-            ncplane_putstr_yx(stdplane, y, 1, cmd_buffer.c_str());
+        if (view_start < static_cast<int>(cmd_buffer.size())) {
+            std::string disp = cmd_buffer.substr(view_start, avail_w);
+            ncplane_putstr_yx(stdplane, y, 1, disp.c_str());
         }
     } else {
         ncplane_set_fg_rgb8(stdplane, 240, 200, 100);
