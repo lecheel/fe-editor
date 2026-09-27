@@ -1,6 +1,7 @@
 #include "engine.hpp"
 #include "command.hpp"
 #include "autocomplete.hpp"
+#include "keymap.hpp"
 #include "log.hpp"
 #include <cmath>
 #include <iostream>
@@ -11,7 +12,10 @@
 #include <unordered_set>
 #include <algorithm>
 
+extern int g_hunk_marker_style;
+
 namespace fs = std::filesystem;
+using namespace Keymap;
 
 REGISTER_COMMAND(
     minimap,
@@ -50,6 +54,1383 @@ inline IndentInfo get_indent_info_for_lang(const std::string& lang) {
         info.unit = "    ";
     }
     return info;
+}
+
+bool VimEngine::handle_global_shortcuts(const ncinput& ni, uint32_t key) {
+    if (is_alt(ni, key, 'q')) {
+        running = false;
+        return true;
+    }
+
+    if (is_alt(ni, key, 'e')) {
+        open_filepicker();
+        return true;
+    }
+
+    if (mode != Mode::COMMAND) {
+        if (is_alt(ni, key, 'b')) {
+            open_buffer_list();
+            return true;
+        }
+        if (is_alt(ni, key, '-') || is_alt(ni, key, '_')) {
+            prev_buffer();
+            return true;
+        }
+        if (is_alt(ni, key, '=') || is_alt(ni, key, '+')) {
+            next_buffer();
+            return true;
+        }
+        if (is_alt(ni, key, 's')) {
+            split_window(SplitType::HORIZONTAL);
+            return true;
+        }
+        if (is_alt(ni, key, 'v')) {
+            split_window(SplitType::VERTICAL);
+            return true;
+        }
+        if (is_alt(ni, key, 'x')) {
+            close_active_window();
+            return true;
+        }
+        if (key == '\t' || is_alt(ni, key, 'w')) {
+            active_win_idx = (active_win_idx + 1) % windows.size();
+            set_info_msg("Focused Window #" + std::to_string(windows[active_win_idx].id));
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
+    // 1. Mini help overlay (F12)
+    if (is_fkey(ni, key, 12)) {
+        show_mini_help = !show_mini_help;
+        return;
+    }
+    if (show_mini_help) {
+        if (is_esc(ni, key) || key == 'q' || key == 'Q') {
+            show_mini_help = false;
+        }
+        return;
+    }
+
+    // 2. Git Status view (F1 / F6)
+    if (is_fkey(ni, key, 1) || is_fkey(ni, key, 6)) {
+        if (show_git_status) {
+            close_git_status();
+        } else {
+            show_filepicker = false;
+            show_settings_popup = false;
+            show_git_hunk_popup = false;
+            show_whichkey_popup = false;
+            show_buffer_list = false;
+            show_rg_popup = false;
+            show_hunk_diff = false;
+            open_git_status();
+        }
+        return;
+    }
+    if (show_git_status) {
+        handle_git_status_input(ni, key);
+        return;
+    }
+
+    // 3. Side-by-side Hunk Diff / Delta View (F5)
+    if (is_fkey(ni, key, 5)) {
+        if (show_hunk_diff) {
+            close_hunk_diff();
+        } else {
+            show_filepicker = false;
+            show_settings_popup = false;
+            show_git_hunk_popup = false;
+            show_whichkey_popup = false;
+            show_buffer_list = false;
+            show_rg_popup = false;
+            open_hunk_diff();
+        }
+        return;
+    }
+    if (show_hunk_diff) {
+        handle_hunk_diff_input(ni, key);
+        return;
+    }
+
+    // 4. Hunk navigation shortcuts (F2 / F3)
+    if (is_fkey(ni, key, 2)) {
+        jump_to_prev_hunk();
+        return;
+    }
+    if (is_fkey(ni, key, 3)) {
+        jump_to_next_hunk();
+        return;
+    }
+
+    // 5. Git Hunk popup (F4)
+    if (is_fkey(ni, key, 4)) {
+        if (show_git_hunk_popup) {
+            show_git_hunk_popup = false;
+        } else {
+            show_whichkey_popup = false;
+            open_git_hunk_popup();
+        }
+        return;
+    }
+    if (show_git_hunk_popup) {
+        handle_git_hunk_popup(ni, key);
+        return;
+    }
+
+    // 6. Settings popup (F9)
+    if (is_fkey(ni, key, 9)) {
+        show_settings_popup = !show_settings_popup;
+        if (show_settings_popup) {
+            show_git_hunk_popup = false;
+            show_whichkey_popup = false;
+        }
+        return;
+    }
+    if (show_settings_popup) {
+        handle_settings_popup(ni, key);
+        return;
+    }
+
+    // 7. Ripgrep popup (F11)
+    if (is_fkey(ni, key, 11)) {
+        if (show_rg_popup) {
+            show_rg_popup = false;
+        } else {
+            show_filepicker = false;
+            show_settings_popup = false;
+            show_git_hunk_popup = false;
+            show_whichkey_popup = false;
+            if (!rg_groups.empty()) {
+                show_rg_popup = true;
+                set_info_msg("Ripgrep: \"" + rg_query + "\" (" + std::to_string(rg_flattened_matches.size()) + " matches)");
+            } else {
+                std::string c_word = get_word_under_cursor();
+                if (!c_word.empty()) {
+                    run_ripgrep(c_word);
+                } else {
+                    set_info_msg("No previous search results. Usage: :vg <pattern>");
+                }
+            }
+        }
+        return;
+    }
+    if (show_rg_popup) {
+        handle_rg_popup_input(ni, key);
+        return;
+    }
+
+    // 8. Buffer list popup
+    if (show_buffer_list) {
+        handle_buffer_list_input(ni, key);
+        return;
+    }
+
+    // 9. File picker popup
+    if (show_filepicker) {
+        handle_filepicker_input(ni, key);
+        return;
+    }
+
+    // 10. Leader key WhichKey popup
+    if (leader_pending) {
+        handle_whichkey_popup(ni, key);
+        return;
+    }
+
+    // 11. Global shortcuts (Alt combinations, window cycling, etc.)
+    if (handle_global_shortcuts(ni, key)) {
+        return;
+    }
+
+    // 12. Modal dispatch
+    switch (mode) {
+        case Mode::NORMAL:
+            handle_normal_mode(ni, key);
+            break;
+        case Mode::INSERT:
+            handle_insert_mode(ni, key);
+            break;
+        case Mode::VISUAL:
+        case Mode::VISUAL_BLOCK:
+            handle_visual_mode(ni, key);
+            break;
+        case Mode::COMMAND:
+            handle_command_mode(ni, key);
+            break;
+    }
+}
+
+void VimEngine::handle_git_hunk_popup(const ncinput& ni, uint32_t key) {
+    auto& buf = active_buf();
+    const auto& hunks = buf.get_hunks();
+
+    if (is_esc(ni, key) || is_fkey(ni, key, 4) || key == 'q' || key == 'Q') {
+        show_git_hunk_popup = false;
+        return;
+    }
+
+    if (hunks.empty()) {
+        show_git_hunk_popup = false;
+        return;
+    }
+
+    if (key == 'r' || key == 'R') {
+        revert_active_hunk();
+        return;
+    }
+
+    if (is_fkey(ni, key, 2) || key == NCKEY_UP || key == 'k' || key == 'K' ||
+        key == 'L' || (ni.shift && (key == 'l' || ni.id == 'l' || ni.id == 'L'))) {
+        active_hunk_idx = (active_hunk_idx + static_cast<int>(hunks.size()) - 1) % hunks.size();
+    } else if (is_fkey(ni, key, 3) || key == NCKEY_DOWN || key == 'j' || key == 'J' || key == 'l') {
+        active_hunk_idx = (active_hunk_idx + 1) % hunks.size();
+    }
+}
+
+void VimEngine::handle_git_status_input(const ncinput& ni, uint32_t key) {
+    std::string root = detect_git_repo_root(!project_dir.empty() ? project_dir : ".");
+    if (root.empty()) root = project_dir;
+
+    if (git_stash_action_active) {
+        if (!git_stash_status_msg.empty() && key != 'y' && key != 'd' && key != 'q' && !is_esc(ni, key)) {
+            git_stash_status_msg.clear();
+        }
+
+        if (key == 'q' || key == 'Q' || is_esc(ni, key)) {
+            git_stash_action_active = false;
+            git_stash_status_msg.clear();
+            return;
+        }
+
+        if (key == 'y' || key == 'Y') {
+            if (!git_is_clean(root)) {
+                git_stash_status_msg = "Working tree not clean — commit or stash first";
+                return;
+            }
+            if (git_stash_pop(root, git_stash_action_idx)) {
+                git_stash_action_active = false;
+                git_stash_status_msg.clear();
+                refresh_git_status();
+                git_status_msg = "Popped " + git_stash_action_ref;
+            } else {
+                git_stash_status_msg = "Failed to pop " + git_stash_action_ref;
+            }
+            return;
+        }
+
+        if (key == 'd' || key == 'D') {
+            if (!git_is_clean(root)) {
+                git_stash_status_msg = "Working tree not clean — commit or stash first";
+                return;
+            }
+            if (git_stash_drop(root, git_stash_action_idx)) {
+                git_stash_action_active = false;
+                git_stash_status_msg.clear();
+                refresh_git_status();
+                git_status_msg = "Dropped " + git_stash_action_ref;
+            } else {
+                git_stash_status_msg = "Failed to drop " + git_stash_action_ref;
+            }
+            return;
+        }
+        return;
+    }
+
+    if (!git_status_msg.empty()) {
+        git_status_msg.clear();
+    }
+
+    if (key == 'q' || key == 'Q' || is_esc(ni, key)) {
+        close_git_status();
+        return;
+    }
+
+    if (key == 'j' || key == NCKEY_DOWN) {
+        if (git_status_cursor + 1 < static_cast<int>(git_status_rows.size())) {
+            git_status_cursor++;
+            refresh_git_status_right();
+        }
+        return;
+    }
+
+    if (key == 'k' || key == NCKEY_UP) {
+        if (git_status_cursor > 0) {
+            git_status_cursor--;
+            refresh_git_status_right();
+        }
+        return;
+    }
+
+    if (key == 'J' || key == 'L' || (ni.shift && (key == 'j' || key == 'l'))) {
+        for (size_t i = git_status_cursor + 1; i < git_status_rows.size(); ++i) {
+            if (git_status_rows[i].kind == GitStatusRow::HEADER) {
+                git_status_cursor = static_cast<int>(i);
+                refresh_git_status_right();
+                return;
+            }
+        }
+        return;
+    }
+
+    if (key == 'K' || key == 'l' || (ni.shift && key == 'k')) {
+        for (int i = git_status_cursor - 1; i >= 0; --i) {
+            if (git_status_rows[i].kind == GitStatusRow::HEADER) {
+                git_status_cursor = i;
+                refresh_git_status_right();
+                return;
+            }
+        }
+        return;
+    }
+
+    if (key == 'g' || key == NCKEY_HOME) {
+        git_status_cursor = 0;
+        refresh_git_status_right();
+        return;
+    }
+
+    if (key == 'G' || key == NCKEY_END) {
+        git_status_cursor = git_status_rows.empty() ? 0 : static_cast<int>(git_status_rows.size()) - 1;
+        refresh_git_status_right();
+        return;
+    }
+
+    if (key == 'r' || key == 'R') {
+        refresh_git_status();
+        git_status_msg = "Refreshed git status";
+        return;
+    }
+
+    if (key == 'z') {
+        if (git_is_clean(root)) {
+            git_status_msg = "Nothing to stash";
+            return;
+        }
+        if (git_stash_push(root)) {
+            refresh_git_status();
+            git_status_msg = "Stashed working changes";
+        } else {
+            git_status_msg = "Failed to stash changes";
+        }
+        return;
+    }
+
+    if (key == 's') {
+        if (git_status_rows.empty() || git_status_cursor < 0 || git_status_cursor >= static_cast<int>(git_status_rows.size())) return;
+        const auto& row = git_status_rows[git_status_cursor];
+        if (row.kind == GitStatusRow::STAGE_FILE) {
+            git_unstage_file(root, row.path);
+            refresh_git_status();
+            git_status_msg = "Unstaged " + row.path;
+        } else if (row.kind == GitStatusRow::UNSTAGE_FILE || row.kind == GitStatusRow::UNTRACKED_FILE) {
+            git_stage_file(root, row.path);
+            refresh_git_status();
+            git_status_msg = "Staged " + row.path;
+        } else {
+            git_status_msg = "Cannot stage/unstage in this section";
+        }
+        return;
+    }
+
+    if (is_enter(ni, key)) {
+        if (git_status_rows.empty() || git_status_cursor < 0 || git_status_cursor >= static_cast<int>(git_status_rows.size())) return;
+        const auto& row = git_status_rows[git_status_cursor];
+
+        if (row.kind == GitStatusRow::STAGE_FILE ||
+            row.kind == GitStatusRow::UNSTAGE_FILE ||
+            row.kind == GitStatusRow::UNTRACKED_FILE ||
+            row.kind == GitStatusRow::COMMIT1_FILE ||
+            row.kind == GitStatusRow::COMMIT2_FILE) {
+
+            std::string full_path = (fs::path(root) / row.path).lexically_normal().string();
+            save_window_position(active_win(), active_buf());
+
+            size_t found_idx = buffers.size();
+            for (size_t i = 0; i < buffers.size(); ++i) {
+                if (buffers[i]->file_path == full_path || buffers[i]->name == row.path || buffers[i]->file_path == row.path) {
+                    found_idx = i;
+                    break;
+                }
+            }
+
+            if (found_idx == buffers.size()) {
+                buffers.push_back(TextBuffer::from_file(full_path));
+                found_idx = buffers.size() - 1;
+            }
+
+            active_win().buffer_idx = found_idx;
+            restore_window_position(active_win(), active_buf());
+            close_git_status();
+            set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
+            return;
+        }
+
+        if (row.kind == GitStatusRow::BRANCH) {
+            if (!git_is_clean(root)) {
+                git_status_msg = "Working tree not clean — commit or stash first";
+                return;
+            }
+            if (git_checkout_branch(root, row.branch_name)) {
+                refresh_git_status();
+                git_status_msg = "Switched to branch '" + row.branch_name + "'";
+            } else {
+                git_status_msg = "Failed to switch to branch '" + row.branch_name + "'";
+            }
+            return;
+        }
+
+        if (row.kind == GitStatusRow::STASH) {
+            git_stash_action_active = true;
+            git_stash_action_ref = row.stash_ref;
+            git_stash_action_idx = row.stash_idx;
+            git_stash_status_msg.clear();
+            return;
+        }
+    }
+}
+
+void VimEngine::close_hunk_diff() {
+    show_hunk_diff = false;
+    auto& buf = (hunk_diff_is_delta && hunk_diff_left_buf) ? *hunk_diff_left_buf : active_buf();
+    auto& win = active_win();
+    if (hunk_diff_cursor_row >= 0 && hunk_diff_cursor_row < static_cast<int>(hunk_diff_diff.rows.size())) {
+        int l_idx = hunk_diff_diff.rows[hunk_diff_cursor_row].left_idx;
+        if (l_idx >= 0 && l_idx < static_cast<int>(buf.lines.size())) {
+            win.cursors = {{l_idx, 0}};
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+        }
+    }
+    hunk_diff_is_delta = false;
+    hunk_diff_left_buf = nullptr;
+    hunk_diff_right_buf = nullptr;
+    set_info_msg("");
+}
+
+void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
+    auto& buf = (hunk_diff_is_delta && hunk_diff_left_buf) ? *hunk_diff_left_buf : active_buf();
+    auto& win = active_win();
+    const auto& diff = hunk_diff_diff;
+
+    if (is_esc(ni, key)) {
+        if (manual_left_active || manual_right_active) {
+            manual_left_active = false;
+            manual_right_active = false;
+            manual_left_start = -1;
+            manual_left_end = -1;
+            manual_right_start = -1;
+            manual_right_end = -1;
+            hunk_diff_status_msg = "Manual markers cleared";
+            return;
+        }
+        close_hunk_diff();
+        return;
+    }
+
+    if (key == 'q' || key == 'Q') {
+        close_hunk_diff();
+        return;
+    }
+
+    if (key == 'm') {
+        if (hunk_diff_focus == "left") {
+            manual_left_start = hunk_diff_cursor_row;
+            manual_left_end = hunk_diff_cursor_row;
+            manual_left_active = true;
+            hunk_diff_status_msg = "Left marker start: row " + std::to_string(hunk_diff_cursor_row + 1) + " (move & press M for end)";
+        } else {
+            manual_right_start = hunk_diff_cursor_row;
+            manual_right_end = hunk_diff_cursor_row;
+            manual_right_active = true;
+            hunk_diff_status_msg = "Right marker start: row " + std::to_string(hunk_diff_cursor_row + 1) + " (move & press M for end)";
+        }
+        return;
+    }
+
+    if (key == 'M' || (ni.shift && (key == 'm' || ni.id == 'm' || ni.id == 'M'))) {
+        if (hunk_diff_focus == "left") {
+            if (manual_left_start < 0) manual_left_start = hunk_diff_cursor_row;
+            manual_left_end = hunk_diff_cursor_row;
+            manual_left_active = true;
+            int r1 = std::min(manual_left_start, manual_left_end) + 1;
+            int r2 = std::max(manual_left_start, manual_left_end) + 1;
+            hunk_diff_status_msg = "Left marker set: rows " + std::to_string(r1) + ".." + std::to_string(r2) + " (press 'a' to merge)";
+        } else {
+            if (manual_right_start < 0) manual_right_start = hunk_diff_cursor_row;
+            manual_right_end = hunk_diff_cursor_row;
+            manual_right_active = true;
+            int r1 = std::min(manual_right_start, manual_right_end) + 1;
+            int r2 = std::max(manual_right_start, manual_right_end) + 1;
+            hunk_diff_status_msg = "Right marker set: rows " + std::to_string(r1) + ".." + std::to_string(r2) + " (press 'a' to merge)";
+        }
+        return;
+    }
+
+    if (key == 'j' || key == NCKEY_DOWN) {
+        if (!diff.rows.empty()) {
+            hunk_diff_cursor_row = std::min(static_cast<int>(diff.rows.size()) - 1, hunk_diff_cursor_row + 1);
+        }
+        return;
+    }
+
+    if (key == 'k' || key == NCKEY_UP) {
+        if (!diff.rows.empty()) {
+            hunk_diff_cursor_row = std::max(0, hunk_diff_cursor_row - 1);
+        }
+        return;
+    }
+
+    if (key == NCKEY_PGDOWN) {
+        if (!diff.rows.empty()) {
+            hunk_diff_cursor_row = std::min(static_cast<int>(diff.rows.size()) - 1, hunk_diff_cursor_row + 10);
+        }
+        return;
+    }
+
+    if (key == NCKEY_PGUP) {
+        if (!diff.rows.empty()) {
+            hunk_diff_cursor_row = std::max(0, hunk_diff_cursor_row - 10);
+        }
+        return;
+    }
+
+    if (key == 'l' || is_fkey(ni, key, 3)) {
+        hunk_diff_cursor_row = diff.next_hunk_row(hunk_diff_cursor_row);
+        hunk_diff_status_msg.clear();
+        return;
+    }
+
+    if (key == 'L' || (ni.shift && (key == 'l' || ni.id == 'l' || ni.id == 'L')) || is_fkey(ni, key, 2)) {
+        hunk_diff_cursor_row = diff.prev_hunk_row(hunk_diff_cursor_row);
+        hunk_diff_status_msg.clear();
+        return;
+    }
+
+    if (key == '\t' || key == NCKEY_TAB) {
+        hunk_diff_focus = (hunk_diff_focus == "left") ? "right" : "left";
+        return;
+    }
+
+    if (key == 'y') {
+        if (hunk_diff_cursor_row < 0 || hunk_diff_cursor_row >= static_cast<int>(diff.rows.size())) return;
+        const auto& row = diff.rows[hunk_diff_cursor_row];
+        if (hunk_diff_focus == "left") {
+            if (row.left_idx < 0 || row.left_idx >= static_cast<int>(diff.left_lines.size())) {
+                hunk_diff_status_msg = "Cannot yank padding row";
+                return;
+            }
+            std::string line = diff.left_lines[row.left_idx];
+            yank_reg.is_linewise = true;
+            yank_reg.lines = {line};
+            yank_reg.text = line + "\n";
+            hunk_diff_status_msg = "Yanked line from " + (hunk_diff_is_delta ? hunk_diff_left_name : "Working");
+        } else {
+            if (row.right_idx < 0 || row.right_idx >= static_cast<int>(diff.right_lines.size())) {
+                hunk_diff_status_msg = "Cannot yank padding row";
+                return;
+            }
+            std::string line = diff.right_lines[row.right_idx];
+            yank_reg.is_linewise = true;
+            yank_reg.lines = {line};
+            yank_reg.text = line + "\n";
+            hunk_diff_status_msg = "Yanked line from " + (hunk_diff_is_delta ? hunk_diff_right_name : "HEAD");
+        }
+        return;
+    }
+
+    if (key == 'p') {
+        if (hunk_diff_focus == "right" && !hunk_diff_is_delta) {
+            hunk_diff_status_msg = "Cannot paste into HEAD: HEAD is read-only";
+            return;
+        }
+        if (yank_reg.lines.empty() || !yank_reg.is_linewise) {
+            hunk_diff_status_msg = "Clipboard empty or not line content";
+            return;
+        }
+        if (hunk_diff_cursor_row < 0 || hunk_diff_cursor_row >= static_cast<int>(diff.rows.size())) return;
+        const auto& row = diff.rows[hunk_diff_cursor_row];
+
+        if (hunk_diff_focus == "right" && hunk_diff_is_delta && hunk_diff_right_buf) {
+            int target_y = -1;
+            if (row.right_idx >= 0) {
+                target_y = row.right_idx + 1;
+            } else {
+                for (int r = hunk_diff_cursor_row - 1; r >= 0; --r) {
+                    if (diff.rows[r].right_idx >= 0) {
+                        target_y = diff.rows[r].right_idx + 1;
+                        break;
+                    }
+                }
+                if (target_y == -1) target_y = 0;
+            }
+            hunk_diff_right_buf->push_undo(win.cursors);
+            int ins_pos = std::clamp(target_y, 0, static_cast<int>(hunk_diff_right_buf->lines.size()));
+            hunk_diff_right_buf->lines.insert(hunk_diff_right_buf->lines.begin() + ins_pos, yank_reg.lines.begin(), yank_reg.lines.end());
+            hunk_diff_right_buf->modified = true;
+            hunk_diff_right_buf->version++;
+            hunk_diff_right_buf->invalidate_hunks();
+            if (hunk_diff_right_buf->syntax) hunk_diff_right_buf->syntax->update_text(hunk_diff_right_buf->lines);
+            hunk_diff_head_lines = hunk_diff_right_buf->lines;
+            if (hunk_diff_head_syntax) hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            hunk_diff_status_msg = "Pasted line into " + hunk_diff_right_name;
+            return;
+        }
+
+        int target_y = -1;
+        if (row.left_idx >= 0) {
+            target_y = row.left_idx + 1;
+        } else {
+            for (int r = hunk_diff_cursor_row - 1; r >= 0; --r) {
+                if (diff.rows[r].left_idx >= 0) {
+                    target_y = diff.rows[r].left_idx + 1;
+                    break;
+                }
+            }
+            if (target_y == -1) target_y = 0;
+        }
+        buf.push_undo(win.cursors);
+        int ins_pos = std::clamp(target_y, 0, static_cast<int>(buf.lines.size()));
+        buf.lines.insert(buf.lines.begin() + ins_pos, yank_reg.lines.begin(), yank_reg.lines.end());
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+        hunk_diff_status_msg = "Pasted line below cursor in " + (hunk_diff_is_delta ? hunk_diff_left_name : "working buffer");
+        return;
+    }
+
+    if (key == 'd') {
+        if (hunk_diff_focus == "right" && !hunk_diff_is_delta) {
+            hunk_diff_status_msg = "Cannot delete from HEAD: HEAD is read-only";
+            return;
+        }
+        if (hunk_diff_cursor_row < 0 || hunk_diff_cursor_row >= static_cast<int>(diff.rows.size())) return;
+        const auto& row = diff.rows[hunk_diff_cursor_row];
+
+        if (hunk_diff_focus == "right" && hunk_diff_is_delta && hunk_diff_right_buf) {
+            if (row.right_idx < 0 || row.right_idx >= static_cast<int>(hunk_diff_right_buf->lines.size())) {
+                hunk_diff_status_msg = "Cannot delete padding row";
+                return;
+            }
+            hunk_diff_right_buf->push_undo(win.cursors);
+            int del_y = row.right_idx;
+            if (hunk_diff_right_buf->lines.size() > 1) {
+                hunk_diff_right_buf->lines.erase(hunk_diff_right_buf->lines.begin() + del_y);
+            } else {
+                hunk_diff_right_buf->lines[0] = "";
+            }
+            hunk_diff_right_buf->modified = true;
+            hunk_diff_right_buf->version++;
+            hunk_diff_right_buf->invalidate_hunks();
+            if (hunk_diff_right_buf->syntax) hunk_diff_right_buf->syntax->update_text(hunk_diff_right_buf->lines);
+            hunk_diff_head_lines = hunk_diff_right_buf->lines;
+            if (hunk_diff_head_syntax) hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+            hunk_diff_status_msg = "Deleted line from " + hunk_diff_right_name;
+            return;
+        }
+
+        if (row.left_idx < 0 || row.left_idx >= static_cast<int>(buf.lines.size())) {
+            hunk_diff_status_msg = "Cannot delete padding row";
+            return;
+        }
+        buf.push_undo(win.cursors);
+        int del_y = row.left_idx;
+        if (buf.lines.size() > 1) {
+            buf.lines.erase(buf.lines.begin() + del_y);
+        } else {
+            buf.lines[0] = "";
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+        hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+        hunk_diff_status_msg = "Deleted line from " + (hunk_diff_is_delta ? hunk_diff_left_name : "working buffer");
+        return;
+    }
+
+    if (key == 'a' || key == 'A') {
+        if (hunk_diff_cursor_row < 0 || hunk_diff_cursor_row >= static_cast<int>(diff.rows.size())) return;
+
+        bool is_push = (key == 'a');
+        bool left_to_right = (hunk_diff_focus == "left" && is_push) ||
+                             (hunk_diff_focus == "right" && !is_push);
+
+        if (left_to_right && (!hunk_diff_is_delta || !hunk_diff_right_buf)) {
+            hunk_diff_status_msg = "Cannot modify HEAD: HEAD is read-only";
+            return;
+        }
+
+        bool in_left_marker = manual_left_active &&
+            (hunk_diff_cursor_row >= std::min(manual_left_start, manual_left_end) &&
+             hunk_diff_cursor_row <= std::max(manual_left_start, manual_left_end));
+
+        bool in_right_marker = manual_right_active &&
+            (hunk_diff_cursor_row >= std::min(manual_right_start, manual_right_end) &&
+             hunk_diff_cursor_row <= std::max(manual_right_start, manual_right_end));
+
+        bool in_marker = (hunk_diff_focus == "left" && in_left_marker) ||
+                         (hunk_diff_focus == "right" && in_right_marker);
+
+        if (in_marker) {
+            int l_r1 = manual_left_active ? std::min(manual_left_start, manual_left_end)
+                                          : std::min(manual_right_start, manual_right_end);
+            int l_r2 = manual_left_active ? std::max(manual_left_start, manual_left_end)
+                                          : std::max(manual_right_start, manual_right_end);
+
+            int r_r1 = manual_right_active ? std::min(manual_right_start, manual_right_end)
+                                           : std::min(manual_left_start, manual_left_end);
+            int r_r2 = manual_right_active ? std::max(manual_right_start, manual_right_end)
+                                           : std::max(manual_left_start, manual_left_end);
+
+            int left_line_start = -1;
+            int left_line_end = -1;
+            for (int r = l_r1; r <= l_r2 && r < static_cast<int>(diff.rows.size()); ++r) {
+                int idx = diff.rows[r].left_idx;
+                if (idx >= 0) {
+                    if (left_line_start == -1 || idx < left_line_start) left_line_start = idx;
+                    if (left_line_end == -1 || idx > left_line_end) left_line_end = idx;
+                }
+            }
+            if (left_line_start == -1) {
+                for (int r = l_r1 - 1; r >= 0; --r) {
+                    if (diff.rows[r].left_idx >= 0) {
+                        left_line_start = diff.rows[r].left_idx + 1;
+                        left_line_end = left_line_start - 1;
+                        break;
+                    }
+                }
+                if (left_line_start == -1) {
+                    left_line_start = 0;
+                    left_line_end = -1;
+                }
+            }
+
+            std::vector<std::string> right_lines_to_merge;
+            for (int r = r_r1; r <= r_r2 && r < static_cast<int>(diff.rows.size()); ++r) {
+                int idx = diff.rows[r].right_idx;
+                if (idx >= 0 && idx < static_cast<int>(diff.right_lines.size())) {
+                    right_lines_to_merge.push_back(diff.right_lines[idx]);
+                }
+            }
+
+            buf.push_undo(win.cursors);
+            int erase_cnt = (left_line_end >= left_line_start) ? (left_line_end - left_line_start + 1) : 0;
+            if (left_line_start < static_cast<int>(buf.lines.size()) && erase_cnt > 0) {
+                int actual_erase = std::min(erase_cnt, static_cast<int>(buf.lines.size()) - left_line_start);
+                buf.lines.erase(buf.lines.begin() + left_line_start, buf.lines.begin() + left_line_start + actual_erase);
+            }
+            if (!right_lines_to_merge.empty()) {
+                int ins_pos = std::clamp(left_line_start, 0, static_cast<int>(buf.lines.size()));
+                buf.lines.insert(buf.lines.begin() + ins_pos, right_lines_to_merge.begin(), right_lines_to_merge.end());
+            }
+            if (buf.lines.empty()) buf.lines.push_back("");
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            manual_left_active = false;
+            manual_right_active = false;
+            hunk_diff_status_msg = "Manual merge: Replaced with " + std::to_string(right_lines_to_merge.size()) + " lines from HEAD";
+            hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+            return;
+        }
+
+        const auto& row = diff.rows[hunk_diff_cursor_row];
+        if (row.hunk_idx == -1 || row.hunk_idx >= static_cast<int>(diff.hunks.size())) {
+            hunk_diff_status_msg = "No hunk at cursor to apply";
+            return;
+        }
+        const auto& hunk = diff.hunks[row.hunk_idx];
+
+        if (left_to_right && hunk_diff_is_delta && hunk_diff_right_buf) {
+            hunk_diff_right_buf->push_undo(win.cursors);
+            int r_start = hunk.right_start;
+            int r_count = hunk.right_count;
+            if (r_start < static_cast<int>(hunk_diff_right_buf->lines.size())) {
+                int erase_cnt = std::min(r_count, static_cast<int>(hunk_diff_right_buf->lines.size()) - r_start);
+                hunk_diff_right_buf->lines.erase(hunk_diff_right_buf->lines.begin() + r_start,
+                                                 hunk_diff_right_buf->lines.begin() + r_start + erase_cnt);
+            }
+            if (!hunk.left_lines.empty()) {
+                int ins_pos = std::min(r_start, static_cast<int>(hunk_diff_right_buf->lines.size()));
+                hunk_diff_right_buf->lines.insert(hunk_diff_right_buf->lines.begin() + ins_pos,
+                                                  hunk.left_lines.begin(), hunk.left_lines.end());
+            }
+            if (hunk_diff_right_buf->lines.empty()) hunk_diff_right_buf->lines.push_back("");
+            hunk_diff_right_buf->modified = true;
+            hunk_diff_right_buf->version++;
+            hunk_diff_right_buf->invalidate_hunks();
+            if (hunk_diff_right_buf->syntax) hunk_diff_right_buf->syntax->update_text(hunk_diff_right_buf->lines);
+            hunk_diff_head_lines = hunk_diff_right_buf->lines;
+            if (hunk_diff_head_syntax) hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            hunk_diff_status_msg = "Pushed hunk #" + std::to_string(hunk.id + 1) + " from " +
+                                   hunk_diff_left_name + " → " + hunk_diff_right_name;
+            hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+            return;
+        }
+
+        buf.push_undo(win.cursors);
+        int l_start = hunk.left_start;
+        int l_count = hunk.left_count;
+        if (l_start < static_cast<int>(buf.lines.size())) {
+            int erase_cnt = std::min(l_count, static_cast<int>(buf.lines.size()) - l_start);
+            buf.lines.erase(buf.lines.begin() + l_start, buf.lines.begin() + l_start + erase_cnt);
+        }
+        if (!hunk.right_lines.empty()) {
+            int ins_pos = std::min(l_start, static_cast<int>(buf.lines.size()));
+            buf.lines.insert(buf.lines.begin() + ins_pos, hunk.right_lines.begin(), hunk.right_lines.end());
+        }
+        if (buf.lines.empty()) buf.lines.push_back("");
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+        hunk_diff_status_msg = hunk_diff_is_delta ?
+            ("Pulled hunk #" + std::to_string(hunk.id + 1) + " from " + hunk_diff_right_name + " → " + hunk_diff_left_name) :
+            ("Applied hunk #" + std::to_string(hunk.id + 1) + " from HEAD to working");
+        hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+        return;
+    }
+
+    if (key == 'u') {
+        if (hunk_diff_is_delta && hunk_diff_right_buf && hunk_diff_focus == "right") {
+            if (hunk_diff_right_buf->undo(win.cursors)) {
+                hunk_diff_head_lines = hunk_diff_right_buf->lines;
+                if (hunk_diff_head_syntax) hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+                hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+                hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+                hunk_diff_status_msg = "Undo applied to " + hunk_diff_right_name;
+            } else {
+                hunk_diff_status_msg = "Already at oldest change for " + hunk_diff_right_name;
+            }
+            return;
+        }
+
+        if (buf.undo(win.cursors)) {
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+            hunk_diff_status_msg = "Undo applied to " + (hunk_diff_is_delta ? hunk_diff_left_name : "working");
+        } else {
+            hunk_diff_status_msg = "Already at oldest change";
+        }
+        return;
+    }
+
+    if (key == 'w' || is_ctrl(ni, key, 's')) {
+        if (hunk_diff_is_delta && hunk_diff_right_buf && hunk_diff_focus == "right") {
+            if (hunk_diff_right_buf->save_to_file()) {
+                hunk_diff_status_msg = "\"" + hunk_diff_right_buf->name + "\" written";
+            } else {
+                hunk_diff_status_msg = "E212: Can't open file for writing";
+            }
+        } else {
+            if (buf.save_to_file()) {
+                hunk_diff_status_msg = "\"" + buf.name + "\" written";
+            } else {
+                hunk_diff_status_msg = "E212: Can't open file for writing";
+            }
+        }
+        return;
+    }
+}
+
+void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
+    if (is_esc(ni, key)) {
+        show_filepicker = false;
+        set_info_msg("");
+        return;
+    }
+
+    if (is_enter(ni, key)) {
+        if (!filepicker_filtered_files.empty() &&
+            filepicker_selected_idx >= 0 &&
+            filepicker_selected_idx < static_cast<int>(filepicker_filtered_files.size())) {
+
+            std::string rel_path = filepicker_filtered_files[filepicker_selected_idx];
+            std::string full_path = (fs::path(!project_dir.empty() ? project_dir : ".") / rel_path).lexically_normal().string();
+
+            save_window_position(active_win(), active_buf());
+
+            size_t found_idx = buffers.size();
+            for (size_t i = 0; i < buffers.size(); ++i) {
+                if (buffers[i]->file_path == full_path || buffers[i]->name == rel_path || buffers[i]->file_path == rel_path) {
+                    found_idx = i;
+                    break;
+                }
+            }
+
+            if (found_idx == buffers.size()) {
+                buffers.push_back(TextBuffer::from_file(full_path));
+                found_idx = buffers.size() - 1;
+            }
+
+            active_win().buffer_idx = found_idx;
+            restore_window_position(active_win(), active_buf());
+            show_filepicker = false;
+            set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
+        }
+        return;
+    }
+
+    if (key == NCKEY_UP || is_ctrl(ni, key, 'p') || is_ctrl(ni, key, 'k')) {
+        if (filepicker_selected_idx > 0) {
+            filepicker_selected_idx--;
+        } else if (!filepicker_filtered_files.empty()) {
+            filepicker_selected_idx = static_cast<int>(filepicker_filtered_files.size()) - 1;
+        }
+        return;
+    }
+
+    if (key == NCKEY_DOWN || is_ctrl(ni, key, 'n') || is_ctrl(ni, key, 'j')) {
+        if (filepicker_selected_idx + 1 < static_cast<int>(filepicker_filtered_files.size())) {
+            filepicker_selected_idx++;
+        } else {
+            filepicker_selected_idx = 0;
+        }
+        return;
+    }
+
+    if (is_backspace(ni, key)) {
+        if (!filepicker_query.empty()) {
+            filepicker_query.pop_back();
+            filter_filepicker_files();
+        }
+        return;
+    }
+
+    if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
+        filepicker_query += static_cast<char>(key);
+        filter_filepicker_files();
+        return;
+    }
+}
+
+void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
+    if (is_esc(ni, key) || is_fkey(ni, key, 11) || ((key == 'q' || key == 'Q') && !rg_replace_active)) {
+        if (rg_replace_active) {
+            rg_replace_active = false;
+            set_info_msg("View Mode: [j/k/▲/▼] Navigate, [Enter] Open, [TAB] Replace Mode");
+            return;
+        }
+        show_rg_popup = false;
+        rg_replace_active = false;
+        set_info_msg("");
+        return;
+    }
+
+    if (key == '\t' || key == NCKEY_TAB) {
+        rg_replace_active = !rg_replace_active;
+        return;
+    }
+
+    if (is_enter(ni, key)) {
+        if (rg_replace_active) {
+            apply_rg_replace();
+        } else {
+            open_selected_rg_match();
+        }
+        return;
+    }
+
+    if (key == ' ') {
+        if (rg_replace_active) {
+            if (ni.shift || ni.ctrl || ni.alt) {
+                rg_replace_query += ' ';
+                return;
+            }
+            if (!rg_display_lines.empty() &&
+                rg_selected_display_idx >= 0 &&
+                rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
+
+                const auto& dline = rg_display_lines[rg_selected_display_idx];
+                if (dline.is_file_header) {
+                    bool any_included = false;
+                    for (const auto& m : rg_flattened_matches) {
+                        if (m.file == dline.file && !m.ignored) {
+                            any_included = true;
+                            break;
+                        }
+                    }
+                    for (auto& m : rg_flattened_matches) {
+                        if (m.file == dline.file) {
+                            m.ignored = any_included;
+                        }
+                    }
+                    set_info_msg(any_included ? "File ignored for replace: " + dline.file
+                                              : "File included for replace: " + dline.file);
+                } else if (dline.match_idx >= 0 && dline.match_idx < static_cast<int>(rg_flattened_matches.size())) {
+                    rg_flattened_matches[dline.match_idx].ignored = !rg_flattened_matches[dline.match_idx].ignored;
+                    set_info_msg(rg_flattened_matches[dline.match_idx].ignored ? "Line ignored for replace." : "Line included for replace.");
+                }
+            }
+            return;
+        }
+    }
+
+    if (rg_replace_active && is_backspace(ni, key)) {
+        if (!rg_replace_query.empty()) {
+            rg_replace_query.pop_back();
+        }
+        return;
+    }
+
+    if (key == NCKEY_UP || (!rg_replace_active && (key == 'k' || key == 'K')) ||
+        is_ctrl(ni, key, 'p') || is_ctrl(ni, key, 'k')) {
+        if (rg_selected_display_idx > 0) {
+            rg_selected_display_idx--;
+        } else if (!rg_display_lines.empty()) {
+            rg_selected_display_idx = static_cast<int>(rg_display_lines.size()) - 1;
+        }
+        if (rg_selected_display_idx >= 0 && rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
+            int midx = rg_display_lines[rg_selected_display_idx].match_idx;
+            if (midx >= 0) rg_selected_match_idx = midx;
+        }
+        return;
+    }
+
+    if (key == NCKEY_DOWN || (!rg_replace_active && (key == 'j' || key == 'J')) ||
+        is_ctrl(ni, key, 'n') || is_ctrl(ni, key, 'j')) {
+        if (rg_selected_display_idx + 1 < static_cast<int>(rg_display_lines.size())) {
+            rg_selected_display_idx++;
+        } else {
+            rg_selected_display_idx = 0;
+        }
+        if (rg_selected_display_idx >= 0 && rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
+            int midx = rg_display_lines[rg_selected_display_idx].match_idx;
+            if (midx >= 0) rg_selected_match_idx = midx;
+        }
+        return;
+    }
+
+    if (key == NCKEY_PGUP) {
+        rg_selected_display_idx = std::max(0, rg_selected_display_idx - 10);
+        if (rg_selected_display_idx >= 0 && rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
+            int midx = rg_display_lines[rg_selected_display_idx].match_idx;
+            if (midx >= 0) rg_selected_match_idx = midx;
+        }
+        return;
+    }
+
+    if (key == NCKEY_PGDOWN) {
+        rg_selected_display_idx = std::min(static_cast<int>(rg_display_lines.size()) - 1, rg_selected_display_idx + 10);
+        if (rg_selected_display_idx >= 0 && rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
+            int midx = rg_display_lines[rg_selected_display_idx].match_idx;
+            if (midx >= 0) rg_selected_match_idx = midx;
+        }
+        return;
+    }
+
+    if (rg_replace_active) {
+        if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
+            rg_replace_query += static_cast<char>(key);
+            return;
+        }
+        if (ni.utf8[0] != '\0' && !ni.alt && !ni.ctrl) {
+            rg_replace_query += reinterpret_cast<const char*>(ni.utf8);
+            return;
+        }
+    }
+
+    if (key == ']' || key == '}') {
+        for (size_t i = rg_selected_display_idx + 1; i < rg_display_lines.size(); ++i) {
+            if (rg_display_lines[i].is_file_header) {
+                rg_selected_display_idx = static_cast<int>(i);
+                return;
+            }
+        }
+        return;
+    }
+    if (key == '[' || key == '{') {
+        for (int i = rg_selected_display_idx - 1; i >= 0; --i) {
+            if (rg_display_lines[i].is_file_header) {
+                rg_selected_display_idx = i;
+                return;
+            }
+        }
+        return;
+    }
+
+    if (key == 'r' || key == 'R') {
+        run_ripgrep(rg_query);
+        return;
+    }
+}
+
+void VimEngine::handle_buffer_list_input(const ncinput& ni, uint32_t key) {
+    if (is_esc(ni, key) || is_alt(ni, key, 'b')) {
+        show_buffer_list = false;
+        set_info_msg("");
+        return;
+    }
+
+    if (buffers.empty()) {
+        show_buffer_list = false;
+        return;
+    }
+
+    int total_filtered = static_cast<int>(buffer_list_filtered_indices.size());
+
+    if (is_enter(ni, key)) {
+        if (!buffer_list_filtered_indices.empty() &&
+            buffer_list_selected_idx >= 0 &&
+            buffer_list_selected_idx < total_filtered) {
+            size_t target_idx = buffer_list_filtered_indices[buffer_list_selected_idx];
+            show_buffer_list = false;
+            switch_to_buffer(target_idx);
+        } else {
+            show_buffer_list = false;
+        }
+        return;
+    }
+
+    if (key == NCKEY_UP || is_ctrl(ni, key, 'p') || is_ctrl(ni, key, 'k') ||
+        (ni.shift && (key == '\t' || key == NCKEY_TAB))) {
+        if (total_filtered > 0) {
+            if (buffer_list_selected_idx > 0) {
+                buffer_list_selected_idx--;
+            } else {
+                buffer_list_selected_idx = total_filtered - 1;
+            }
+        }
+        return;
+    }
+
+    if (key == NCKEY_DOWN || is_ctrl(ni, key, 'n') || is_ctrl(ni, key, 'j') || key == '\t') {
+        if (total_filtered > 0) {
+            if (buffer_list_selected_idx + 1 < total_filtered) {
+                buffer_list_selected_idx++;
+            } else {
+                buffer_list_selected_idx = 0;
+            }
+        }
+        return;
+    }
+
+    if (is_ctrl(ni, key, 'd') || is_ctrl(ni, key, 'x') || key == NCKEY_DEL) {
+        if (buffers.size() <= 1) {
+            set_info_msg("Cannot close the last remaining buffer.");
+            return;
+        }
+        if (buffer_list_filtered_indices.empty() ||
+            buffer_list_selected_idx < 0 ||
+            buffer_list_selected_idx >= total_filtered) {
+            return;
+        }
+
+        size_t to_remove = buffer_list_filtered_indices[buffer_list_selected_idx];
+        std::string name = buffers[to_remove]->name;
+        buffers.erase(buffers.begin() + to_remove);
+        for (auto& w : windows) {
+            if (w.buffer_idx == to_remove) {
+                w.buffer_idx = (to_remove > 0) ? to_remove - 1 : 0;
+                restore_window_position(w, *buffers[w.buffer_idx]);
+            } else if (w.buffer_idx > to_remove) {
+                w.buffer_idx--;
+            }
+        }
+
+        filter_buffer_list();
+        set_info_msg("Closed buffer: " + name);
+        return;
+    }
+
+    if (is_backspace(ni, key)) {
+        if (!buffer_list_query.empty()) {
+            buffer_list_query.pop_back();
+            filter_buffer_list();
+        }
+        return;
+    }
+
+    if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
+        buffer_list_query += static_cast<char>(key);
+        filter_buffer_list();
+        return;
+    }
+}
+
+void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
+    auto& win = active_win();
+    auto& buf = active_buf();
+
+    leader_pending = false;
+    show_whichkey_popup = false;
+
+    if (is_esc(ni, key) || key == ' ') {
+        set_info_msg("");
+        return;
+    }
+
+    switch (key) {
+        case 'f':
+            open_filepicker();
+            break;
+        case 'g': {
+            std::string word = get_word_under_cursor();
+            if (!word.empty()) {
+                run_ripgrep(word);
+            } else if (!rg_groups.empty()) {
+                show_rg_popup = true;
+            } else {
+                set_info_msg("No word under cursor. Use :vg <pattern>");
+            }
+            break;
+        }
+        case 'w':
+            if (buf.save_to_file("")) {
+                save_window_position(win, buf);
+                config.save();
+                set_info_msg("\"" + buf.name + "\" written");
+            } else {
+                set_info_msg("E212: Can't open file for writing");
+            }
+            break;
+        case 'q':
+            if (buf.modified) {
+                set_info_msg("E37: No write since last change (use :q! to override)");
+            } else {
+                save_all_positions();
+                config.save();
+                running = false;
+            }
+            break;
+        case 'x':
+            if (buf.save_to_file("")) {
+                save_all_positions();
+                config.save();
+                running = false;
+            } else {
+                set_info_msg("E212: Can't open file for writing");
+            }
+            break;
+        case 's':
+            open_git_status();
+            break;
+        case 'v':
+            split_window(SplitType::VERTICAL);
+            break;
+        case 'c':
+            close_active_window();
+            break;
+        case 'b':
+            next_buffer();
+            break;
+        case 'B':
+            prev_buffer();
+            break;
+        case 'd':
+            open_hunk_diff();
+            break;
+        case 'h':
+            open_git_hunk_popup();
+            break;
+        case 'j':
+            jump_to_next_hunk();
+            break;
+        case 'k':
+            jump_to_prev_hunk();
+            break;
+        case 'l':
+            show_settings_popup = true;
+            break;
+        case 'u':
+            if (buf.undo(win.cursors)) {
+                win.clamp_all_cursors(buf, mode);
+                update_window_scroll(win, buf);
+                set_info_msg("Undo applied. Undo states left: " + std::to_string(buf.undo_stack.size()));
+            } else {
+                set_info_msg("Already at oldest change.");
+            }
+            break;
+        default:
+            if (key >= 32 && key < 127) {
+                set_info_msg("WhichKey: Unmapped shortcut [" + std::string(1, static_cast<char>(key)) + "]");
+            }
+            break;
+    }
+}
+
+void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
+    if (is_esc(ni, key) || is_fkey(ni, key, 9) || key == 'q' || key == 'Q') {
+        show_settings_popup = false;
+        config.save();
+        set_info_msg("Settings applied.");
+        return;
+    }
+
+    const int total_items = 7;
+    if (key == NCKEY_UP || key == 'k' || key == 'K') {
+        settings_selected_idx = (settings_selected_idx + total_items - 1) % total_items;
+    } else if (key == NCKEY_DOWN || key == 'j' || key == 'J') {
+        settings_selected_idx = (settings_selected_idx + 1) % total_items;
+    } else if (is_enter(ni, key) || key == ' ' ||
+               key == NCKEY_LEFT || key == NCKEY_RIGHT || key == 'h' || key == 'l') {
+        switch (settings_selected_idx) {
+            case 0:
+                config.settings.show_line_numbers = !config.settings.show_line_numbers;
+                break;
+            case 1: {
+                int m = static_cast<int>(config.settings.line_number_mode);
+                if (key == NCKEY_LEFT || key == 'h') {
+                    m = (m + 2) % 3;
+                } else {
+                    m = (m + 1) % 3;
+                }
+                config.settings.line_number_mode = static_cast<LineNumberMode>(m);
+                break;
+            }
+            case 2: {
+                if (key == NCKEY_LEFT || key == 'h') {
+                    if (config.settings.line_number_width == 0) config.settings.line_number_width = 8;
+                    else if (config.settings.line_number_width <= 3) config.settings.line_number_width = 0;
+                    else config.settings.line_number_width--;
+                } else {
+                    if (config.settings.line_number_width == 0) config.settings.line_number_width = 3;
+                    else if (config.settings.line_number_width >= 8) config.settings.line_number_width = 0;
+                    else config.settings.line_number_width++;
+                }
+                break;
+            }
+            case 3:
+                config.settings.highlight_current_line = !config.settings.highlight_current_line;
+                break;
+            case 4:
+                g_hunk_marker_style = (g_hunk_marker_style + 1) % 2;
+                break;
+            case 5: {
+                if (key == NCKEY_LEFT || key == 'h') {
+                    if (config.settings.scroll_offset <= 0) config.settings.scroll_offset = 10;
+                    else config.settings.scroll_offset--;
+                } else {
+                    if (config.settings.scroll_offset >= 10) config.settings.scroll_offset = 0;
+                    else config.settings.scroll_offset++;
+                }
+                break;
+            }
+            case 6:
+                config.settings.hunk_diff_right_syntax = !config.settings.hunk_diff_right_syntax;
+                break;
+        }
+        config.save();
+        for (auto& w : windows) {
+            if (w.buffer_idx < buffers.size()) {
+                update_window_scroll(w, *buffers[w.buffer_idx]);
+            }
+        }
+    }
 }
 
 inline std::string compute_line_indent(const std::vector<std::string>& lines, int line_idx, const std::string& lang) {
@@ -1502,7 +2883,7 @@ void VimEngine::handle_cmd_completion_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (key == NCKEY_BACKSPACE || key == 127 || key == '\b') {
+    if (is_backspace(ni, key)) {
         if (cmd_buffer.size() > cmd_completion_base_cmd.size()) {
             cmd_buffer.pop_back();
             cmd_completion_prefix = cmd_buffer.substr(cmd_completion_base_cmd.size());

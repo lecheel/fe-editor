@@ -248,6 +248,8 @@ public:
     void close_active_window();
     void layout_windows();
 
+    void handle_key_input(const ncinput& ni, uint32_t key);
+    bool handle_global_shortcuts(const ncinput& ni, uint32_t key);
     bool handle_navigation(const ncinput& ni, uint32_t key);
     void handle_normal_mode(const ncinput& ni, uint32_t key);
     void handle_visual_mode(const ncinput& ni, uint32_t key);
