@@ -1582,13 +1582,22 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
                 ncplane_putstr_yx(stdplane, draw_y, right_text_x, "~");
             } else {
                 const std::string& line = diff.right_lines[arow.right_idx];
-                std::vector<SyntaxStyle> r_styles;
-                if (hunk_diff_head_syntax) {
-                    r_styles = hunk_diff_head_syntax->get_line_styles(arow.right_idx, line);
-                } else if (buf.syntax) {
-                    r_styles = buf.syntax->get_line_styles(-1, line);
+                if (config.settings.hunk_diff_right_syntax) {
+                    std::vector<SyntaxStyle> r_styles;
+                    if (hunk_diff_head_syntax) {
+                        r_styles = hunk_diff_head_syntax->get_line_styles(arow.right_idx, line);
+                    } else if (buf.syntax) {
+                        r_styles = buf.syntax->get_line_styles(-1, line);
+                    }
+                    draw_syntax_line(right_text_x, right_text_max_w, line, r_styles);
+                } else {
+                    ncplane_set_fg_rgb8(stdplane, 215, 220, 230);
+                    std::string disp = line;
+                    if (static_cast<int>(disp.size()) > right_text_max_w) {
+                        disp = disp.substr(0, right_text_max_w);
+                    }
+                    ncplane_putstr_yx(stdplane, draw_y, right_text_x, disp.c_str());
                 }
-                draw_syntax_line(right_text_x, right_text_max_w, line, r_styles);
             }
         }
     }

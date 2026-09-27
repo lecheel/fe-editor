@@ -1105,7 +1105,7 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    const int total_items = 6;
+    const int total_items = 7;
     if (key == NCKEY_UP || key == 'k' || key == 'K') {
         settings_selected_idx = (settings_selected_idx + total_items - 1) % total_items;
     } else if (key == NCKEY_DOWN || key == 'j' || key == 'J') {
@@ -1154,6 +1154,9 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
                 }
                 break;
             }
+            case 6:
+                config.settings.hunk_diff_right_syntax = !config.settings.hunk_diff_right_syntax;
+                break;
         }
         config.save();
         for (auto& w : windows) {
@@ -1167,7 +1170,7 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
 void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen_w) {
     int popup_w = std::max(38, static_cast<int>(screen_w * 0.50));
     popup_w = std::min(popup_w, static_cast<int>(screen_w) - 2);
-    int popup_h = 12;
+    int popup_h = 13;
     int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
     int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
 
@@ -1223,7 +1226,8 @@ void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen
         {"Hunk/Gutter Width", "< " + w_str + " >"},
         {"Highlight Active", config.settings.highlight_current_line ? "[ ON ]" : "[ OFF ]"},
         {"Hunk Gutter Style", hunk_style_str},
-        {"Scroll Clamp Offset", scrolloff_str}
+        {"Scroll Clamp Offset", scrolloff_str},
+        {"F5 Right Syntax", config.settings.hunk_diff_right_syntax ? "[ ON ]" : "[ OFF ]"}
     };
 
     for (size_t i = 0; i < items.size(); ++i) {

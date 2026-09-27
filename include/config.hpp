@@ -15,6 +15,7 @@ struct EditorSettings {
     bool highlight_current_line{true};
     int whichkey_delay_ms{300};
     int scroll_offset{3}; // Scroll clamp offset (scrolloff margin lines: 0..10)
+    bool hunk_diff_right_syntax{false}; // F5 right panel (HEAD) syntax highlighting
 };
 
 struct FilePosition {

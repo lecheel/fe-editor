@@ -127,6 +127,8 @@ void ConfigManager::load_json(const std::string& path) {
                             try { g_hunk_marker_style = std::stoi(v); } catch (...) {}
                         } else if (k == "scroll_offset" || k == "scrolloff" || k == "scroll_clamp_offset") {
                             try { settings.scroll_offset = std::stoi(v); } catch (...) {}
+                        } else if (k == "hunk_diff_right_syntax" || k == "diff_right_syntax") {
+                            settings.hunk_diff_right_syntax = (v == "1" || v == "true");
                         }
                     }
                     j++;
@@ -192,7 +194,8 @@ void ConfigManager::save_json(const std::string& path) {
     out << "    \"line_number_width\": " << settings.line_number_width << ",\n";
     out << "    \"highlight_current_line\": " << (settings.highlight_current_line ? "1" : "0") << ",\n";
     out << "    \"hunk_marker_style\": " << g_hunk_marker_style << ",\n";
-    out << "    \"scroll_offset\": " << settings.scroll_offset << "\n";
+    out << "    \"scroll_offset\": " << settings.scroll_offset << ",\n";
+    out << "    \"hunk_diff_right_syntax\": " << (settings.hunk_diff_right_syntax ? "1" : "0") << "\n";
     out << "  },\n";
     out << "  \"positions\": {\n";
     size_t idx = 0;
