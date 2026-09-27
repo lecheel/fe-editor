@@ -91,9 +91,7 @@ void KeymapConfig::load(const std::string& config_dir) {
                     << "    \"<Space>q\": \":q\",\n"
                     << "    \"<Space>f\": \"filepicker\",\n"
                     << "    \"<Space>g\": \"ripgrep\",\n"
-                    << "    \"<Space>b\": \"buffer_list\",\n"
                     << "    \"<Space>d\": \"hunk_diff\",\n"
-                    << "    \"<Space>s\": \"git_status\",\n"
                     << "    \"<Space>u\": \"undo\",\n"
                     << "    \"H\": \"0\",\n"
                     << "    \"L\": \"$\"\n"
@@ -631,8 +629,8 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    // 10. Leader key WhichKey popup
-    if (leader_pending) {
+    // 10. Leader key WhichKey popup / Window Ops popup
+    if (leader_pending || ctrl_w_pending) {
         handle_whichkey_popup(ni, key);
         return;
     }
@@ -1662,8 +1660,83 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
 
+    bool was_ctrl_w = ctrl_w_pending || (whichkey_mode == WhichKeyMode::WINDOW);
     leader_pending = false;
+    ctrl_w_pending = false;
     show_whichkey_popup = false;
+
+    if (was_ctrl_w) {
+        whichkey_mode = WhichKeyMode::LEADER;
+        if (is_esc(ni, key)) {
+            set_info_msg("");
+            return;
+        }
+
+        std::string k_str = Keymap::key_to_string(ni, key);
+        if (!k_str.empty()) {
+            std::string chord = "<C-w>" + k_str;
+            auto it = keymap.normal_map.find(chord);
+            if (it != keymap.normal_map.end()) {
+                keymap.execute_action(*this, Mode::NORMAL, it->second);
+                return;
+            }
+        }
+
+        switch (key) {
+            case 'q':
+            case 'c':
+                close_active_window();
+                break;
+            case 'v':
+                split_window(SplitType::VERTICAL);
+                break;
+            case 's':
+                split_window(SplitType::HORIZONTAL);
+                break;
+            case 'w':
+            case 23:
+                active_win_idx = (active_win_idx + 1) % windows.size();
+                set_info_msg("Focused Window #" + std::to_string(windows[active_win_idx].id));
+                break;
+            case 'W':
+                active_win_idx = (active_win_idx + windows.size() - 1) % windows.size();
+                set_info_msg("Focused Window #" + std::to_string(windows[active_win_idx].id));
+                break;
+            case 'o':
+                if (windows.size() > 1) {
+                    Window current = active_win();
+                    windows = {current};
+                    active_win_idx = 0;
+                    split_mode = SplitType::NONE;
+                    set_info_msg("Closed other windows.");
+                } else {
+                    set_info_msg("Already only one window.");
+                }
+                break;
+            case 'h':
+            case 'k':
+            case NCKEY_LEFT:
+            case NCKEY_UP:
+                active_win_idx = (active_win_idx + windows.size() - 1) % windows.size();
+                set_info_msg("Focused Window #" + std::to_string(windows[active_win_idx].id));
+                break;
+            case 'l':
+            case 'j':
+            case NCKEY_RIGHT:
+            case NCKEY_DOWN:
+                active_win_idx = (active_win_idx + 1) % windows.size();
+                set_info_msg("Focused Window #" + std::to_string(windows[active_win_idx].id));
+                break;
+            default:
+                if (key >= 32 && key < 127) {
+                    set_info_msg("Window Ops: Unmapped key [" + std::string(1, static_cast<char>(key)) + "]");
+                }
+                break;
+        }
+        return;
+    }
+
+    whichkey_mode = WhichKeyMode::LEADER;
 
     if (keymap.handle_whichkey(*this, ni, key)) {
         return;
@@ -1715,21 +1788,6 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
             } else {
                 set_info_msg("E212: Can't open file for writing");
             }
-            break;
-        case 's':
-            open_git_status();
-            break;
-        case 'v':
-            split_window(SplitType::VERTICAL);
-            break;
-        case 'c':
-            close_active_window();
-            break;
-        case 'b':
-            next_buffer();
-            break;
-        case 'B':
-            prev_buffer();
             break;
         case 'd':
             open_hunk_diff();
@@ -2445,8 +2503,20 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
 
     if (key == ' ') {
         leader_pending = true;
+        ctrl_w_pending = false;
         show_whichkey_popup = false;
+        whichkey_mode = WhichKeyMode::LEADER;
         leader_start_time = std::chrono::steady_clock::now();
+        return;
+    }
+
+    if (key == 23 || is_ctrl(ni, key, 'w')) {
+        ctrl_w_pending = true;
+        leader_pending = false;
+        ctrl_w_start_time = std::chrono::steady_clock::now();
+        show_whichkey_popup = true;
+        whichkey_mode = WhichKeyMode::WINDOW;
+        set_info_msg("Window [Ctrl-w]: [q] Close  [v] V-Split  [s] H-Split  [w] Next");
         return;
     }
 

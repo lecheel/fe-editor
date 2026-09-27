@@ -475,25 +475,46 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
         std::string desc;
     };
 
-    std::vector<WkItem> col1 = {
-        {"f", "File Picker"},
-        {"g", "Grep Cursor"},
-        {"w", "Save Buffer"},
-        {"s", "Split Horiz"},
-        {"v", "Split Vert"},
-        {"b", "Next Buffer"},
-        {"u", "Undo"}
-    };
+    std::vector<WkItem> col1;
+    std::vector<WkItem> col2;
+    std::string title;
+    uint8_t border_r = 170, border_g = 115, border_b = 250;
 
-    std::vector<WkItem> col2 = {
-        {"d", "Hunk Diff (F5)"},
-        {"h", "Hunk Popup (F4)"},
-        {"s", "Git View (F1)"},
-        {"j", "Next Hunk"},
-        {"k", "Prev Hunk"},
-        {"l", "Gutter Settings"},
-        {"q", "Quit"}
-    };
+    if (whichkey_mode == WhichKeyMode::WINDOW) {
+        title = " Window Ops [Ctrl-w] ";
+        border_r = 75; border_g = 175; border_b = 245;
+        col1 = {
+            {"q", "Close Window"},
+            {"v", "Split Vert"},
+            {"s", "Split Horiz"},
+            {"w", "Next Window"},
+            {"c", "Close Window"}
+        };
+        col2 = {
+            {"o", "Close Others"},
+            {"h", "Focus Prev"},
+            {"l", "Focus Next"},
+            {"W", "Prev Window"},
+            {"Esc", "Cancel"}
+        };
+    } else {
+        title = " Leader [Space] ";
+        border_r = 170; border_g = 115; border_b = 250;
+        col1 = {
+            {"f", "File Picker"},
+            {"g", "Grep Cursor"},
+            {"w", "Save Buffer"},
+            {"u", "Undo"},
+            {"q", "Quit"}
+        };
+        col2 = {
+            {"d", "Hunk Diff (F5)"},
+            {"h", "Hunk Popup (F4)"},
+            {"j", "Next Hunk"},
+            {"k", "Prev Hunk"},
+            {"l", "Gutter Settings"}
+        };
+    }
 
     int popup_w = 44;
     int popup_h = 9;
@@ -501,14 +522,12 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
     popup_w = std::min(popup_w, static_cast<int>(screen_w) - 2);
     popup_h = std::min(popup_h, static_cast<int>(screen_h) - 3);
 
-    // Place popup in the right-bottom corner
     int popup_x = static_cast<int>(screen_w) - popup_w - 1;
     int popup_y = static_cast<int>(screen_h) - 2 - popup_h;
 
     popup_x = std::max(0, popup_x);
     popup_y = std::max(0, popup_y);
 
-    // Background fill
     ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
     for (int r = 0; r < popup_h; ++r) {
         for (int c = 0; c < popup_w; ++c) {
@@ -516,8 +535,7 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
         }
     }
 
-    // Border (roundbox) in vibrant violet
-    ncplane_set_fg_rgb8(stdplane, 170, 115, 250);
+    ncplane_set_fg_rgb8(stdplane, border_r, border_g, border_b);
     ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
     ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
     ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
@@ -533,7 +551,6 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
     }
 
     // Header title
-    std::string title = " Leader [Space] ";
     ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 

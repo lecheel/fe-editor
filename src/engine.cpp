@@ -235,11 +235,11 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   [Space] g       Ripgrep word on cursor (or :vg <pattern>)",
             "//   [Space] w       Save buffer",
             "//   [Space] q       Quit (or :q / :q!)",
-            "//   [Space] s / v   Split horizontal / vertical",
             "//   [Alt-b]         Buffer list popup (or :ls / :buffers)",
             "//   [Alt--] / [:bp] Switch to previous buffer",
             "//   [Alt-=] / [:bn] Switch to next buffer",
-            "//   [Space] b / B   Cycle next / previous buffer",
+            "//   b / B           Cycle next / previous buffer",
+            "//   [Space] d       Git hunk diff view (F5)",
             "//   [Space] h       Git hunk diff popup (F4)",
             "//   [Space] j / k   Jump next / prev git hunk (F3 / F2)",
             "//   [Space] l       Line number & gutter settings popup (F9)",
@@ -288,6 +288,8 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   [Esc]           Clear multiple cursors / return to Normal Mode",
             "",
             "// --- Windows & Splits ----------------------------------------------------",
+            "//   [Ctrl-w]        Window ops menu with WhichKey popup:",
+            "//                   [q] close, [v] split vert, [s] split horiz, [w] next window",
             "//   [Alt-s] / [:sp] Horizontal split window",
             "//   [Alt-v] / [:vsp]Vertical split window",
             "//   [Tab] / [Alt-w] Cycle window focus",
@@ -491,14 +493,21 @@ void VimEngine::run() {
         ncinput ni;
         uint32_t key = 0;
 
-        if (leader_pending && !show_whichkey_popup) {
+        if ((leader_pending || ctrl_w_pending) && !show_whichkey_popup) {
             auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - leader_start_time).count();
+            auto start_t = ctrl_w_pending ? ctrl_w_start_time : leader_start_time;
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_t).count();
             int delay = config.settings.whichkey_delay_ms > 0 ? config.settings.whichkey_delay_ms : 300;
 
-            if (elapsed >= delay) {
+            if (elapsed >= delay || ctrl_w_pending) {
                 show_whichkey_popup = true;
-                set_info_msg("WhichKey: [Space] Leader Menu");
+                if (ctrl_w_pending) {
+                    whichkey_mode = WhichKeyMode::WINDOW;
+                    set_info_msg("Window [Ctrl-w]: [q] Close  [v] V-Split  [s] H-Split  [w] Next");
+                } else {
+                    whichkey_mode = WhichKeyMode::LEADER;
+                    set_info_msg("WhichKey: [Space] Leader Menu");
+                }
                 continue;
             } else {
                 int remain_ms = delay - static_cast<int>(elapsed);
@@ -508,7 +517,13 @@ void VimEngine::run() {
                 key = notcurses_get(nc, &ts, &ni);
                 if (key == 0) {
                     show_whichkey_popup = true;
-                    set_info_msg("WhichKey: [Space] Leader Menu");
+                    if (ctrl_w_pending) {
+                        whichkey_mode = WhichKeyMode::WINDOW;
+                        set_info_msg("Window [Ctrl-w]: [q] Close  [v] V-Split  [s] H-Split  [w] Next");
+                    } else {
+                        whichkey_mode = WhichKeyMode::LEADER;
+                        set_info_msg("WhichKey: [Space] Leader Menu");
+                    }
                     continue;
                 }
             }

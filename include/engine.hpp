@@ -116,9 +116,16 @@ private:
     int manual_right_start{-1};
     int manual_right_end{-1};
 
+    enum class WhichKeyMode {
+        LEADER,
+        WINDOW
+    };
+    WhichKeyMode whichkey_mode{WhichKeyMode::LEADER};
     bool leader_pending{false};
+    bool ctrl_w_pending{false};
     bool show_whichkey_popup{false};
     std::chrono::steady_clock::time_point leader_start_time;
+    std::chrono::steady_clock::time_point ctrl_w_start_time;
 
     bool show_buffer_list{false};
     std::string buffer_list_query;
