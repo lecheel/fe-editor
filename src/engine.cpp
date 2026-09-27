@@ -324,7 +324,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
                      std::to_string(w.cursors.front().y + 1) + ":" +
                      std::to_string(w.cursors.front().x + 1) + "]");
     } else {
-        set_info_msg("[F12] Help | [F5] Hunk Diff | [F4] Popup | [F2/F3] Hunks | [F9] Settings | [Space] Leader");
+        set_info_msg("[F12] Help | [F1] Git View | [F5] Hunk Diff | [F4] Popup | [F2/F3] Hunks | [F9] Settings | [Space] Leader");
     }
 }
 
@@ -499,6 +499,27 @@ void VimEngine::run() {
 
         if (show_mini_help && (key == NCKEY_ESC || key == 'q' || key == 'Q')) {
             show_mini_help = false;
+            continue;
+        }
+
+        if (key == NCKEY_F01 || ni.id == NCKEY_F01 || key == NCKEY_F06 || ni.id == NCKEY_F06) {
+            if (show_git_status) {
+                close_git_status();
+            } else {
+                show_filepicker = false;
+                show_settings_popup = false;
+                show_git_hunk_popup = false;
+                show_whichkey_popup = false;
+                show_buffer_list = false;
+                show_rg_popup = false;
+                show_hunk_diff = false;
+                open_git_status();
+            }
+            continue;
+        }
+
+        if (show_git_status) {
+            handle_git_status_input(ni, key);
             continue;
         }
 

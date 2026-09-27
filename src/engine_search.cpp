@@ -165,6 +165,663 @@ void VimEngine::handle_git_hunk_popup(const ncinput& ni, uint32_t key) {
     }
 }
 
+void VimEngine::rebuild_git_status_rows() {
+    git_status_rows.clear();
+
+    // Section 1: Stage Changes
+    git_status_rows.push_back({GitStatusRow::HEADER, 0, "", ' ', 0, "", "", "", false, "", ""});
+    if (git_view_data.staged.empty()) {
+        git_status_rows.push_back({GitStatusRow::PLACEHOLDER, 0, "", ' ', 0, "", "", "", false, "", ""});
+    } else {
+        for (const auto& f : git_view_data.staged) {
+            git_status_rows.push_back({GitStatusRow::STAGE_FILE, 0, f.path, f.glyph, 0, "", "", "", false, "", ""});
+        }
+    }
+
+    // Section 2: Unstage Changes
+    git_status_rows.push_back({GitStatusRow::HEADER, 1, "", ' ', 0, "", "", "", false, "", ""});
+    if (git_view_data.unstaged.empty()) {
+        git_status_rows.push_back({GitStatusRow::PLACEHOLDER, 1, "", ' ', 0, "", "", "", false, "", ""});
+    } else {
+        for (const auto& f : git_view_data.unstaged) {
+            git_status_rows.push_back({GitStatusRow::UNSTAGE_FILE, 1, f.path, f.glyph, 0, "", "", "", false, "", ""});
+        }
+    }
+
+    // Section 3: Untracked Files
+    git_status_rows.push_back({GitStatusRow::HEADER, 2, "", ' ', 0, "", "", "", false, "", ""});
+    if (git_view_data.untracked.empty()) {
+        git_status_rows.push_back({GitStatusRow::PLACEHOLDER, 2, "", ' ', 0, "", "", "", false, "", ""});
+    } else {
+        for (const auto& f : git_view_data.untracked) {
+            git_status_rows.push_back({GitStatusRow::UNTRACKED_FILE, 2, f.path, f.glyph, 0, "", "", "", false, "", ""});
+        }
+    }
+
+    // Section 4: Last Commit
+    git_status_rows.push_back({GitStatusRow::HEADER, 3, "", ' ', 0, "", "", "", false, "", ""});
+    if (git_view_data.recent_commits.empty() || git_view_data.recent_commits[0].files.empty()) {
+        git_status_rows.push_back({GitStatusRow::PLACEHOLDER, 3, "", ' ', 0, "", "", "", false, "", ""});
+    } else {
+        for (const auto& f : git_view_data.recent_commits[0].files) {
+            git_status_rows.push_back({GitStatusRow::COMMIT1_FILE, 3, f.path, f.glyph, 0, "", "", "", false, "", git_view_data.recent_commits[0].hash});
+        }
+    }
+
+    // Section 5: Last Commit -1
+    git_status_rows.push_back({GitStatusRow::HEADER, 4, "", ' ', 0, "", "", "", false, "", ""});
+    if (git_view_data.recent_commits.size() < 2 || git_view_data.recent_commits[1].files.empty()) {
+        git_status_rows.push_back({GitStatusRow::PLACEHOLDER, 4, "", ' ', 0, "", "", "", false, "", ""});
+    } else {
+        for (const auto& f : git_view_data.recent_commits[1].files) {
+            git_status_rows.push_back({GitStatusRow::COMMIT2_FILE, 4, f.path, f.glyph, 0, "", "", "", false, "", git_view_data.recent_commits[1].hash});
+        }
+    }
+
+    // Section 6: Stashes
+    git_status_rows.push_back({GitStatusRow::HEADER, 5, "", ' ', 0, "", "", "", false, "", ""});
+    if (git_view_data.stashes.empty()) {
+        git_status_rows.push_back({GitStatusRow::PLACEHOLDER, 5, "", ' ', 0, "", "", "", false, "", ""});
+    } else {
+        for (const auto& s : git_view_data.stashes) {
+            git_status_rows.push_back({GitStatusRow::STASH, 5, "", ' ', s.index, s.ref, s.subject, "", false, "", ""});
+        }
+    }
+
+    // Section 7: Branches
+    git_status_rows.push_back({GitStatusRow::HEADER, 6, "", ' ', 0, "", "", "", false, "", ""});
+    if (git_view_data.branches.empty()) {
+        git_status_rows.push_back({GitStatusRow::PLACEHOLDER, 6, "", ' ', 0, "", "", "", false, "", ""});
+    } else {
+        for (const auto& b : git_view_data.branches) {
+            git_status_rows.push_back({GitStatusRow::BRANCH, 6, "", ' ', 0, "", "", b.name, b.is_current, b.reltime, ""});
+        }
+    }
+
+    if (git_status_cursor >= static_cast<int>(git_status_rows.size())) {
+        git_status_cursor = std::max(0, static_cast<int>(git_status_rows.size()) - 1);
+    }
+}
+
+void VimEngine::refresh_git_status() {
+    std::string root = detect_git_repo_root(!project_dir.empty() ? project_dir : ".");
+    if (root.empty()) root = project_dir;
+    git_view_data = query_git_view_data(root);
+    rebuild_git_status_rows();
+    refresh_git_status_right();
+}
+
+void VimEngine::refresh_git_status_right() {
+    git_status_right_lines.clear();
+    git_status_right_scroll_y = 0;
+    if (git_status_rows.empty() || git_status_cursor < 0 || git_status_cursor >= static_cast<int>(git_status_rows.size())) {
+        return;
+    }
+
+    const auto& row = git_status_rows[git_status_cursor];
+    std::string root = detect_git_repo_root(!project_dir.empty() ? project_dir : ".");
+    if (root.empty()) root = project_dir;
+
+    std::vector<std::string> left;
+    std::vector<std::string> right;
+
+    if (row.kind == GitStatusRow::STAGE_FILE) {
+        left = git_get_file_lines(root, "HEAD", row.path);
+        right = git_get_file_lines(root, "INDEX", row.path);
+    } else if (row.kind == GitStatusRow::UNSTAGE_FILE) {
+        left = git_get_file_lines(root, "INDEX", row.path);
+        right = git_get_file_lines(root, "WORKING", row.path);
+    } else if (row.kind == GitStatusRow::UNTRACKED_FILE) {
+        left.clear();
+        right = git_get_file_lines(root, "WORKING", row.path);
+    } else if (row.kind == GitStatusRow::COMMIT1_FILE) {
+        if (!git_view_data.recent_commits.empty()) {
+            std::string h = git_view_data.recent_commits[0].hash;
+            left = git_get_file_lines(root, h + "~1", row.path);
+            right = git_get_file_lines(root, h, row.path);
+        }
+    } else if (row.kind == GitStatusRow::COMMIT2_FILE) {
+        if (git_view_data.recent_commits.size() >= 2) {
+            std::string h = git_view_data.recent_commits[1].hash;
+            left = git_get_file_lines(root, h + "~1", row.path);
+            right = git_get_file_lines(root, h, row.path);
+        }
+    } else {
+        return;
+    }
+
+    auto hunks = compute_myers_diff(left, right);
+    if (hunks.empty()) {
+        return;
+    }
+
+    git_status_right_lines.push_back({GitUnifiedLine::META, "diff --git a/" + row.path + " b/" + row.path});
+    git_status_right_lines.push_back({GitUnifiedLine::META, "--- a/" + row.path});
+    git_status_right_lines.push_back({GitUnifiedLine::META, "+++ b/" + row.path});
+
+    const int CTX = 3;
+    int last_orig_end = 0;
+
+    for (size_t i = 0; i < hunks.size(); ++i) {
+        const auto& h = hunks[i];
+        int ctx_before_start = std::max(0, h.orig_start - CTX);
+
+        if (i > 0) {
+            if (ctx_before_start > last_orig_end) {
+                git_status_right_lines.push_back({GitUnifiedLine::ELLIPSIS, " ..."});
+            } else {
+                ctx_before_start = last_orig_end;
+            }
+        }
+
+        for (int l = ctx_before_start; l < h.orig_start && l < static_cast<int>(left.size()); ++l) {
+            git_status_right_lines.push_back({GitUnifiedLine::CONTEXT, " " + left[l]});
+        }
+
+        char hhdr[128];
+        snprintf(hhdr, sizeof(hhdr), "@@ -%d,%d +%d,%d @@",
+                 h.orig_start + 1, std::max(1, h.orig_count),
+                 h.cur_start + 1, std::max(1, h.cur_count));
+        git_status_right_lines.push_back({GitUnifiedLine::HUNK_HDR, std::string(hhdr)});
+
+        for (const auto& rl : h.orig_lines) {
+            git_status_right_lines.push_back({GitUnifiedLine::REMOVED, "-" + rl});
+        }
+        for (const auto& al : h.cur_lines) {
+            git_status_right_lines.push_back({GitUnifiedLine::ADDED, "+" + al});
+        }
+
+        int h_end = h.orig_start + h.orig_count;
+        int ctx_after_end = std::min(static_cast<int>(left.size()), h_end + CTX);
+        if (i + 1 < hunks.size()) {
+            ctx_after_end = std::min(ctx_after_end, hunks[i + 1].orig_start);
+        }
+        for (int l = h_end; l < ctx_after_end; ++l) {
+            git_status_right_lines.push_back({GitUnifiedLine::CONTEXT, " " + left[l]});
+        }
+        last_orig_end = ctx_after_end;
+    }
+}
+
+void VimEngine::open_git_status() {
+    show_git_status = true;
+    git_status_cursor = 0;
+    git_status_scroll_y = 0;
+    git_status_msg.clear();
+    git_stash_action_active = false;
+    git_stash_status_msg.clear();
+    refresh_git_status();
+}
+
+void VimEngine::close_git_status() {
+    show_git_status = false;
+    git_stash_action_active = false;
+    git_status_msg.clear();
+    git_stash_status_msg.clear();
+}
+
+void VimEngine::handle_git_status_input(const ncinput& ni, uint32_t key) {
+    std::string root = detect_git_repo_root(!project_dir.empty() ? project_dir : ".");
+    if (root.empty()) root = project_dir;
+
+    if (git_stash_action_active) {
+        if (!git_stash_status_msg.empty() && key != 'y' && key != 'd' && key != 'q' && key != NCKEY_ESC) {
+            git_stash_status_msg.clear();
+        }
+
+        if (key == 'q' || key == 'Q' || key == NCKEY_ESC) {
+            git_stash_action_active = false;
+            git_stash_status_msg.clear();
+            return;
+        }
+
+        if (key == 'y' || key == 'Y') {
+            if (!git_is_clean(root)) {
+                git_stash_status_msg = "Working tree not clean — commit or stash first";
+                return;
+            }
+            if (git_stash_pop(root, git_stash_action_idx)) {
+                git_stash_action_active = false;
+                git_stash_status_msg.clear();
+                refresh_git_status();
+                git_status_msg = "Popped " + git_stash_action_ref;
+            } else {
+                git_stash_status_msg = "Failed to pop " + git_stash_action_ref;
+            }
+            return;
+        }
+
+        if (key == 'd' || key == 'D') {
+            if (!git_is_clean(root)) {
+                git_stash_status_msg = "Working tree not clean — commit or stash first";
+                return;
+            }
+            if (git_stash_drop(root, git_stash_action_idx)) {
+                git_stash_action_active = false;
+                git_stash_status_msg.clear();
+                refresh_git_status();
+                git_status_msg = "Dropped " + git_stash_action_ref;
+            } else {
+                git_stash_status_msg = "Failed to drop " + git_stash_action_ref;
+            }
+            return;
+        }
+        return;
+    }
+
+    if (!git_status_msg.empty()) {
+        git_status_msg.clear();
+    }
+
+    if (key == 'q' || key == 'Q' || key == NCKEY_ESC) {
+        close_git_status();
+        return;
+    }
+
+    if (key == 'j' || key == NCKEY_DOWN) {
+        if (git_status_cursor + 1 < static_cast<int>(git_status_rows.size())) {
+            git_status_cursor++;
+            refresh_git_status_right();
+        }
+        return;
+    }
+
+    if (key == 'k' || key == NCKEY_UP) {
+        if (git_status_cursor > 0) {
+            git_status_cursor--;
+            refresh_git_status_right();
+        }
+        return;
+    }
+
+    if (key == 'J' || key == 'L' || (ni.shift && (key == 'j' || key == 'l'))) {
+        for (size_t i = git_status_cursor + 1; i < git_status_rows.size(); ++i) {
+            if (git_status_rows[i].kind == GitStatusRow::HEADER) {
+                git_status_cursor = static_cast<int>(i);
+                refresh_git_status_right();
+                return;
+            }
+        }
+        return;
+    }
+
+    if (key == 'K' || key == 'l' || (ni.shift && key == 'k')) {
+        for (int i = git_status_cursor - 1; i >= 0; --i) {
+            if (git_status_rows[i].kind == GitStatusRow::HEADER) {
+                git_status_cursor = i;
+                refresh_git_status_right();
+                return;
+            }
+        }
+        return;
+    }
+
+    if (key == 'g' || key == NCKEY_HOME) {
+        git_status_cursor = 0;
+        refresh_git_status_right();
+        return;
+    }
+
+    if (key == 'G' || key == NCKEY_END) {
+        git_status_cursor = git_status_rows.empty() ? 0 : static_cast<int>(git_status_rows.size()) - 1;
+        refresh_git_status_right();
+        return;
+    }
+
+    if (key == 'r' || key == 'R') {
+        refresh_git_status();
+        git_status_msg = "Refreshed git status";
+        return;
+    }
+
+    if (key == 'z') {
+        if (git_is_clean(root)) {
+            git_status_msg = "Nothing to stash";
+            return;
+        }
+        if (git_stash_push(root)) {
+            refresh_git_status();
+            git_status_msg = "Stashed working changes";
+        } else {
+            git_status_msg = "Failed to stash changes";
+        }
+        return;
+    }
+
+    if (key == 's') {
+        if (git_status_rows.empty() || git_status_cursor < 0 || git_status_cursor >= static_cast<int>(git_status_rows.size())) return;
+        const auto& row = git_status_rows[git_status_cursor];
+        if (row.kind == GitStatusRow::STAGE_FILE) {
+            git_unstage_file(root, row.path);
+            refresh_git_status();
+            git_status_msg = "Unstaged " + row.path;
+        } else if (row.kind == GitStatusRow::UNSTAGE_FILE || row.kind == GitStatusRow::UNTRACKED_FILE) {
+            git_stage_file(root, row.path);
+            refresh_git_status();
+            git_status_msg = "Staged " + row.path;
+        } else {
+            git_status_msg = "Cannot stage/unstage in this section";
+        }
+        return;
+    }
+
+    if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
+        if (git_status_rows.empty() || git_status_cursor < 0 || git_status_cursor >= static_cast<int>(git_status_rows.size())) return;
+        const auto& row = git_status_rows[git_status_cursor];
+
+        if (row.kind == GitStatusRow::STAGE_FILE ||
+            row.kind == GitStatusRow::UNSTAGE_FILE ||
+            row.kind == GitStatusRow::UNTRACKED_FILE ||
+            row.kind == GitStatusRow::COMMIT1_FILE ||
+            row.kind == GitStatusRow::COMMIT2_FILE) {
+
+            std::string full_path = (fs::path(root) / row.path).lexically_normal().string();
+            save_window_position(active_win(), active_buf());
+
+            size_t found_idx = buffers.size();
+            for (size_t i = 0; i < buffers.size(); ++i) {
+                if (buffers[i]->file_path == full_path || buffers[i]->name == row.path || buffers[i]->file_path == row.path) {
+                    found_idx = i;
+                    break;
+                }
+            }
+
+            if (found_idx == buffers.size()) {
+                buffers.push_back(TextBuffer::from_file(full_path));
+                found_idx = buffers.size() - 1;
+            }
+
+            active_win().buffer_idx = found_idx;
+            restore_window_position(active_win(), active_buf());
+            close_git_status();
+            set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
+            return;
+        }
+
+        if (row.kind == GitStatusRow::BRANCH) {
+            if (!git_is_clean(root)) {
+                git_status_msg = "Working tree not clean — commit or stash first";
+                return;
+            }
+            if (git_checkout_branch(root, row.branch_name)) {
+                refresh_git_status();
+                git_status_msg = "Switched to branch '" + row.branch_name + "'";
+            } else {
+                git_status_msg = "Failed to switch to branch '" + row.branch_name + "'";
+            }
+            return;
+        }
+
+        if (row.kind == GitStatusRow::STASH) {
+            git_stash_action_active = true;
+            git_stash_action_ref = row.stash_ref;
+            git_stash_action_idx = row.stash_idx;
+            git_stash_status_msg.clear();
+            return;
+        }
+    }
+}
+
+void VimEngine::render_git_status(unsigned int screen_h, unsigned int screen_w) {
+    if (screen_h < 6 || screen_w < 30) return;
+
+    int popup_x = 0;
+    int popup_y = 0;
+    int popup_w = static_cast<int>(screen_w);
+    int popup_h = std::max(6, static_cast<int>(screen_h) - 2);
+
+    int list_start_y = popup_y + 1;
+    int visible_rows = popup_h - 2;
+
+    ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    int left_w = std::clamp(static_cast<int>(screen_w * 0.40), 24, std::max(24, static_cast<int>(screen_w) - 24));
+    int divider_x = popup_x + left_w;
+    int right_x = divider_x + 1;
+    int right_w = (popup_x + popup_w - 1) - right_x;
+
+    // Borders
+    ncplane_set_fg_rgb8(stdplane, 100, 180, 255);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+
+    // Title
+    std::string title = " Git Status View (F1 / F6) ";
+    ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    // Divider intersection
+    ncplane_set_fg_rgb8(stdplane, 100, 180, 255);
+    ncplane_putstr_yx(stdplane, popup_y, divider_x, "┬");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, divider_x, "┴");
+
+    // Scrolling for left list
+    if (git_status_cursor < git_status_scroll_y) {
+        git_status_scroll_y = git_status_cursor;
+    }
+    if (git_status_cursor >= git_status_scroll_y + visible_rows) {
+        git_status_scroll_y = git_status_cursor - visible_rows + 1;
+    }
+    git_status_scroll_y = std::max(0, git_status_scroll_y);
+
+    auto get_section_title = [&](int s_idx) -> std::string {
+        switch (s_idx) {
+            case 0: return "Stage Changes (" + std::to_string(git_view_data.staged.size()) + ")";
+            case 1: return "Unstage Changes (" + std::to_string(git_view_data.unstaged.size()) + ")";
+            case 2: return "Untracked Files (" + std::to_string(git_view_data.untracked.size()) + ")";
+            case 3:
+                return !git_view_data.recent_commits.empty() ?
+                    ("Last Commit [" + git_view_data.recent_commits[0].hash + "] (" + std::to_string(git_view_data.recent_commits[0].files.size()) + ")") :
+                    "Last Commit (0)";
+            case 4:
+                return git_view_data.recent_commits.size() >= 2 ?
+                    ("Last Commit -1 [" + git_view_data.recent_commits[1].hash + "] (" + std::to_string(git_view_data.recent_commits[1].files.size()) + ")") :
+                    "Last Commit -1 (0)";
+            case 5: return "Stashes (" + std::to_string(git_view_data.stashes.size()) + ")";
+            case 6: return "------ Branches ------";
+            default: return "";
+        }
+    };
+
+    auto set_section_color = [&](int s_idx) {
+        switch (s_idx) {
+            case 0: ncplane_set_fg_rgb8(stdplane, 80, 220, 100); break; // Green
+            case 1: ncplane_set_fg_rgb8(stdplane, 240, 200, 80); break; // Yellow
+            case 2: ncplane_set_fg_rgb8(stdplane, 80, 200, 240); break; // Cyan
+            case 3:
+            case 4: ncplane_set_fg_rgb8(stdplane, 100, 180, 255); break; // Blue
+            case 5: ncplane_set_fg_rgb8(stdplane, 230, 130, 255); break; // Fuchsia
+            case 6: ncplane_set_fg_rgb8(stdplane, 140, 150, 160); break; // Grey
+            default: ncplane_set_fg_rgb8(stdplane, 220, 220, 220); break;
+        }
+    };
+
+    // Draw Left panel rows
+    for (int r = 0; r < visible_rows; ++r) {
+        int row_idx = git_status_scroll_y + r;
+        int draw_y = list_start_y + r;
+
+        // Divider column
+        ncplane_set_fg_rgb8(stdplane, 65, 75, 95);
+        ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+        ncplane_putstr_yx(stdplane, draw_y, divider_x, "│");
+
+        if (row_idx >= static_cast<int>(git_status_rows.size())) {
+            continue;
+        }
+
+        const auto& row = git_status_rows[row_idx];
+        bool is_cursor = (row_idx == git_status_cursor);
+
+        if (is_cursor) {
+            ncplane_set_bg_rgb8(stdplane, 45, 65, 115);
+            ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        } else {
+            ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+        }
+
+        for (int c = popup_x + 1; c < divider_x; ++c) {
+            ncplane_putchar_yx(stdplane, draw_y, c, ' ');
+        }
+
+        int text_x = popup_x + 2;
+        int max_len = divider_x - text_x - 1;
+
+        if (is_cursor) {
+            ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+            ncplane_putstr_yx(stdplane, draw_y, text_x, "▶ ");
+            text_x += 2;
+            max_len -= 2;
+        } else {
+            ncplane_putstr_yx(stdplane, draw_y, text_x, "  ");
+            text_x += 2;
+            max_len -= 2;
+        }
+
+        if (row.kind == GitStatusRow::HEADER) {
+            if (!is_cursor) set_section_color(row.section_idx);
+            ncplane_on_styles(stdplane, NCSTYLE_BOLD);
+            std::string stitle = get_section_title(row.section_idx);
+            if (static_cast<int>(stitle.size()) > max_len && max_len > 0) stitle = stitle.substr(0, max_len);
+            ncplane_putstr_yx(stdplane, draw_y, text_x, stitle.c_str());
+            ncplane_off_styles(stdplane, NCSTYLE_BOLD);
+        } else if (row.kind == GitStatusRow::PLACEHOLDER) {
+            if (!is_cursor) ncplane_set_fg_rgb8(stdplane, 100, 105, 115);
+            ncplane_putstr_yx(stdplane, draw_y, text_x + 2, "(none)");
+        } else if (row.kind == GitStatusRow::STAGE_FILE || row.kind == GitStatusRow::UNSTAGE_FILE ||
+                   row.kind == GitStatusRow::COMMIT1_FILE || row.kind == GitStatusRow::COMMIT2_FILE) {
+            if (!is_cursor) {
+                if (row.glyph == 'M') ncplane_set_fg_rgb8(stdplane, 240, 200, 80);
+                else if (row.glyph == 'A') ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+                else if (row.glyph == 'D') ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
+                else ncplane_set_fg_rgb8(stdplane, 180, 190, 205);
+            }
+            std::string glyph_str = std::string(1, row.glyph) + "  ";
+            ncplane_putstr_yx(stdplane, draw_y, text_x + 1, glyph_str.c_str());
+
+            if (!is_cursor) ncplane_set_fg_rgb8(stdplane, 220, 225, 235);
+            std::string p = row.path;
+            if (static_cast<int>(p.size()) > max_len - 3 && max_len > 3) p = "..." + p.substr(p.size() - (max_len - 6));
+            ncplane_putstr_yx(stdplane, draw_y, text_x + 4, p.c_str());
+        } else if (row.kind == GitStatusRow::UNTRACKED_FILE) {
+            if (!is_cursor) ncplane_set_fg_rgb8(stdplane, 80, 200, 240);
+            ncplane_putstr_yx(stdplane, draw_y, text_x + 1, "?  ");
+            if (!is_cursor) ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
+            std::string p = row.path;
+            if (static_cast<int>(p.size()) > max_len - 3 && max_len > 3) p = "..." + p.substr(p.size() - (max_len - 6));
+            ncplane_putstr_yx(stdplane, draw_y, text_x + 4, p.c_str());
+        } else if (row.kind == GitStatusRow::STASH) {
+            if (!is_cursor) ncplane_set_fg_rgb8(stdplane, 230, 130, 255);
+            std::string sline = row.stash_ref + "  " + row.stash_subject;
+            if (static_cast<int>(sline.size()) > max_len && max_len > 0) sline = sline.substr(0, max_len);
+            ncplane_putstr_yx(stdplane, draw_y, text_x + 1, sline.c_str());
+        } else if (row.kind == GitStatusRow::BRANCH) {
+            if (!is_cursor) {
+                if (row.is_current_branch) ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+                else ncplane_set_fg_rgb8(stdplane, 200, 205, 215);
+            }
+            std::string btext = (row.is_current_branch ? "* " : "  ") + row.branch_name;
+            if (!row.reltime.empty()) btext += "  (" + row.reltime + ")";
+            if (static_cast<int>(btext.size()) > max_len && max_len > 0) btext = btext.substr(0, max_len);
+            ncplane_putstr_yx(stdplane, draw_y, text_x, btext.c_str());
+        }
+    }
+
+    // Draw Right panel (Unified diff)
+    for (int r = 0; r < visible_rows; ++r) {
+        int draw_y = list_start_y + r;
+        int d_idx = git_status_right_scroll_y + r;
+
+        ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+        for (int c = right_x; c < popup_x + popup_w - 1; ++c) {
+            ncplane_putchar_yx(stdplane, draw_y, c, ' ');
+        }
+
+        if (d_idx >= static_cast<int>(git_status_right_lines.size())) {
+            continue;
+        }
+
+        const auto& dl = git_status_right_lines[d_idx];
+        if (dl.type == GitUnifiedLine::REMOVED) {
+            ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
+            ncplane_set_bg_rgb8(stdplane, 38, 24, 26);
+        } else if (dl.type == GitUnifiedLine::ADDED) {
+            ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+            ncplane_set_bg_rgb8(stdplane, 20, 36, 26);
+        } else if (dl.type == GitUnifiedLine::HUNK_HDR) {
+            ncplane_set_fg_rgb8(stdplane, 80, 200, 240);
+            ncplane_set_bg_rgb8(stdplane, 22, 28, 38);
+            ncplane_on_styles(stdplane, NCSTYLE_BOLD);
+        } else if (dl.type == GitUnifiedLine::ELLIPSIS || dl.type == GitUnifiedLine::META) {
+            ncplane_set_fg_rgb8(stdplane, 130, 140, 155);
+            ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+        } else {
+            ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
+            ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+        }
+
+        for (int c = right_x; c < popup_x + popup_w - 1; ++c) {
+            ncplane_putchar_yx(stdplane, draw_y, c, ' ');
+        }
+
+        std::string txt = dl.text;
+        int max_w = (popup_x + popup_w - 1) - (right_x + 1);
+        if (static_cast<int>(txt.size()) > max_w && max_w > 0) {
+            txt = txt.substr(0, max_w);
+        }
+        ncplane_putstr_yx(stdplane, draw_y, right_x + 1, txt.c_str());
+
+        if (dl.type == GitUnifiedLine::HUNK_HDR) {
+            ncplane_off_styles(stdplane, NCSTYLE_BOLD);
+        }
+    }
+
+    // Footer Status row
+    ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+    if (git_stash_action_active) {
+        std::string prompt_str = " " + git_stash_action_ref + "   ";
+        if (!git_stash_status_msg.empty()) {
+            prompt_str += git_stash_status_msg + "  —  ";
+        }
+        prompt_str += "[y]pop   [d]drop   [q]uit ";
+        ncplane_set_fg_rgb8(stdplane, 255, 215, 80);
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 2, prompt_str.c_str());
+
+        int cur_x = popup_x + 2 + static_cast<int>(prompt_str.size());
+        notcurses_cursor_enable(nc, popup_y + popup_h - 1, cur_x);
+    } else {
+        std::string footer_left = " git status ";
+        if (!git_status_msg.empty()) {
+            footer_left = " " + git_status_msg + " ";
+        }
+        std::string footer_right = " [J/K] section  [s] stage  [z] stash  [Enter] open  [r] refresh  [q] close ";
+        ncplane_set_fg_rgb8(stdplane, 255, 215, 80);
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 2, footer_left.c_str());
+
+        int rx = popup_x + popup_w - 1 - static_cast<int>(footer_right.size());
+        if (rx > popup_x + 2 + static_cast<int>(footer_left.size())) {
+            ncplane_set_fg_rgb8(stdplane, 140, 150, 175);
+            ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, rx, footer_right.c_str());
+        }
+    }
+}
+
 void VimEngine::open_hunk_diff() {
     auto& buf = active_buf();
     if (!buf.is_git_repo || !buf.git_tracked) {

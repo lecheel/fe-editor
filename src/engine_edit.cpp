@@ -35,6 +35,15 @@ REGISTER_COMMAND(
     }
 );
 
+REGISTER_COMMAND(
+    gitview,
+    (std::vector<std::string>{"git", "gitstatus", "gitview", "gs"}),
+    "Open git status view (F1 / F6)",
+    [](CommandContext& ctx) {
+        ctx.engine.open_git_status();
+    }
+);
+
 namespace {
 
 enum class DotCommand {
@@ -1312,6 +1321,8 @@ void VimEngine::execute_command(const std::string& cmd_str) {
         } else {
             set_info_msg("E471: Argument required");
         }
+    } else if (cmd == "git" || cmd == "gitstatus" || cmd == "gitview" || cmd == "gs") {
+        open_git_status();
     } else if (cmd == "sp" || cmd == "split") {
         split_window(SplitType::HORIZONTAL);
     } else if (cmd == "vsp" || cmd == "vsplit") {

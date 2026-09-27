@@ -151,12 +151,12 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
     };
 
     std::vector<Slot> row1 = {
-        {"F1", "--"},
+        {"F1", "Git View"},
         {"F2", "Prev Hunk"},
         {"F3", "Next Hunk"},
         {"F4", "Hunk Popup"},
         {"F5", "Hunk Diff"},
-        {"F6", "--"}
+        {"F6", "Git View"}
     };
 
     std::vector<Slot> row2 = {
@@ -537,7 +537,7 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
             }
             break;
         case 's':
-            split_window(SplitType::HORIZONTAL);
+            open_git_status();
             break;
         case 'v':
             split_window(SplitType::VERTICAL);
@@ -602,11 +602,11 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
     std::vector<WkItem> col2 = {
         {"d", "Hunk Diff (F5)"},
         {"h", "Hunk Popup (F4)"},
+        {"s", "Git View (F1)"},
         {"j", "Next Hunk"},
         {"k", "Prev Hunk"},
         {"l", "Gutter Settings"},
-        {"q", "Quit"},
-        {"x", "Save & Quit"}
+        {"q", "Quit"}
     };
 
     int popup_w = 44;

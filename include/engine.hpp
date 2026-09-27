@@ -46,6 +46,49 @@ private:
     bool show_git_hunk_popup{false};
     int active_hunk_idx{0};
 
+    // F1 / F6 Git Status View (gitview.md) state
+    bool show_git_status{false};
+    GitViewData git_view_data;
+    struct GitStatusRow {
+        enum Kind {
+            HEADER,
+            PLACEHOLDER,
+            STAGE_FILE,
+            UNSTAGE_FILE,
+            UNTRACKED_FILE,
+            COMMIT1_FILE,
+            COMMIT2_FILE,
+            STASH,
+            BRANCH
+        } kind{HEADER};
+        int section_idx{0};
+        std::string path;
+        char glyph{' '};
+        int stash_idx{0};
+        std::string stash_ref;
+        std::string stash_subject;
+        std::string branch_name;
+        bool is_current_branch{false};
+        std::string reltime;
+        std::string commit_hash;
+    };
+    std::vector<GitStatusRow> git_status_rows;
+    int git_status_cursor{0};
+    int git_status_scroll_y{0};
+    std::string git_status_msg;
+
+    struct GitUnifiedLine {
+        enum Type { META, HUNK_HDR, CONTEXT, REMOVED, ADDED, ELLIPSIS } type{META};
+        std::string text;
+    };
+    std::vector<GitUnifiedLine> git_status_right_lines;
+    int git_status_right_scroll_y{0};
+
+    bool git_stash_action_active{false};
+    std::string git_stash_action_ref;
+    int git_stash_action_idx{0};
+    std::string git_stash_status_msg;
+
     // F14 full-screen side-by-side hunk diff state
     bool show_hunk_diff{false};
     std::string hunk_diff_focus{"left"}; // "left" (Working) or "right" (HEAD)
@@ -138,6 +181,14 @@ public:
     void revert_active_hunk();
     void handle_git_hunk_popup(const ncinput& ni, uint32_t key);
     void render_git_hunk_popup(unsigned int screen_h, unsigned int screen_w);
+
+    void open_git_status();
+    void close_git_status();
+    void refresh_git_status();
+    void refresh_git_status_right();
+    void rebuild_git_status_rows();
+    void handle_git_status_input(const ncinput& ni, uint32_t key);
+    void render_git_status(unsigned int screen_h, unsigned int screen_w);
 
     void open_hunk_diff();
     void close_hunk_diff();

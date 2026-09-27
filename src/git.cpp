@@ -5,6 +5,8 @@
 #include <vector>
 #include <set>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
@@ -231,4 +233,238 @@ GitStatus detect_git_status(const std::string& file_path) {
 
     git_repository_free(repo);
     return status;
+}
+
+static std::string exec_git_cmd(const std::string& repo_root, const std::string& git_args) {
+    std::string cmd = "git -C \"" + repo_root + "\" " + git_args + " 2>/dev/null";
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) return "";
+    std::string out;
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), fp)) {
+        out += buf;
+    }
+    pclose(fp);
+    return out;
+}
+
+static int run_git_cmd_status(const std::string& repo_root, const std::string& git_args) {
+    std::string cmd = "git -C \"" + repo_root + "\" " + git_args + " 2>/dev/null";
+    int res = system(cmd.c_str());
+    return res;
+}
+
+GitViewData query_git_view_data(const std::string& repo_root) {
+    GitViewData data;
+    data.root = repo_root;
+    if (repo_root.empty()) return data;
+
+    std::string check = exec_git_cmd(repo_root, "rev-parse --is-inside-work-tree");
+    while (!check.empty() && (check.back() == '\n' || check.back() == '\r')) check.pop_back();
+    if (check != "true") {
+        return data;
+    }
+    data.is_repo = true;
+
+    // 1. Status porcelain v1
+    std::string status_out = exec_git_cmd(repo_root, "status --porcelain=v1 -uall");
+    std::istringstream s_iss(status_out);
+    std::string line;
+    while (std::getline(s_iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.size() < 3) continue;
+        char x = line[0];
+        char y = line[1];
+        std::string path_part = line.substr(3);
+        size_t arrow = path_part.rfind(" -> ");
+        if (arrow != std::string::npos) {
+            path_part = path_part.substr(arrow + 4);
+        }
+        if (!path_part.empty() && path_part.front() == '"' && path_part.back() == '"') {
+            path_part = path_part.substr(1, path_part.size() - 2);
+        }
+
+        if (x == '?' && y == '?') {
+            data.untracked.push_back({'?', path_part});
+        } else {
+            if (x != ' ' && x != '?') {
+                data.staged.push_back({x, path_part});
+            }
+            if (y != ' ' && y != '?') {
+                data.unstaged.push_back({y, path_part});
+            }
+        }
+    }
+
+    // 2. Recent Commits (HEAD and HEAD~1)
+    std::string log_out = exec_git_cmd(repo_root, "log -n 2 --format=\"%h%x1f%s\"");
+    std::istringstream l_iss(log_out);
+    std::vector<std::pair<std::string, std::string>> commits;
+    while (std::getline(l_iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        size_t sep = line.find('\x1f');
+        if (sep != std::string::npos) {
+            commits.push_back({line.substr(0, sep), line.substr(sep + 1)});
+        } else {
+            commits.push_back({line, ""});
+        }
+    }
+
+    for (const auto& c : commits) {
+        GitCommitInfo ci;
+        ci.hash = c.first;
+        ci.subject = c.second;
+        std::string diff_out = exec_git_cmd(repo_root, "diff-tree --no-commit-id --name-status -r " + ci.hash);
+        std::istringstream d_iss(diff_out);
+        std::string d_line;
+        while (std::getline(d_iss, d_line)) {
+            if (!d_line.empty() && d_line.back() == '\r') d_line.pop_back();
+            if (d_line.size() < 2) continue;
+            char g = d_line[0];
+            size_t tab = d_line.find('\t');
+            if (tab != std::string::npos) {
+                std::string p = d_line.substr(tab + 1);
+                size_t tab2 = p.find('\t');
+                if (tab2 != std::string::npos) {
+                    p = p.substr(tab2 + 1);
+                }
+                ci.files.push_back({g, p});
+            }
+        }
+        data.recent_commits.push_back(std::move(ci));
+    }
+
+    // 3. Stashes
+    std::string stash_out = exec_git_cmd(repo_root, "stash list");
+    std::istringstream st_iss(stash_out);
+    while (std::getline(st_iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        size_t colon = line.find(':');
+        if (colon != std::string::npos) {
+            std::string ref = line.substr(0, colon);
+            std::string subj = line.substr(colon + 1);
+            while (!subj.empty() && subj.front() == ' ') subj.erase(0, 1);
+            int idx = 0;
+            size_t at = ref.find("@{");
+            size_t cb = ref.find('}', at);
+            if (at != std::string::npos && cb != std::string::npos) {
+                try { idx = std::stoi(ref.substr(at + 2, cb - at - 2)); } catch (...) {}
+            }
+            data.stashes.push_back({idx, ref, subj});
+        }
+    }
+
+    // 4. Branches
+    std::string branch_out = exec_git_cmd(repo_root, "branch --sort=-committerdate --format=\"%(HEAD)%(refname:short)%00%(committerdate:relative)\"");
+    std::istringstream b_iss(branch_out);
+    while (std::getline(b_iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        bool is_cur = false;
+        size_t start = 0;
+        if (line[0] == '*') {
+            is_cur = true;
+            start = 1;
+        }
+        size_t null_pos = line.find('\0', start);
+        std::string bname;
+        std::string reltime;
+        if (null_pos != std::string::npos) {
+            bname = line.substr(start, null_pos - start);
+            reltime = line.substr(null_pos + 1);
+        } else {
+            bname = line.substr(start);
+        }
+        while (!bname.empty() && bname.front() == ' ') bname.erase(0, 1);
+        while (!bname.empty() && bname.back() == ' ') bname.pop_back();
+        data.branches.push_back({bname, is_cur, reltime});
+    }
+
+    return data;
+}
+
+bool git_is_clean(const std::string& repo_root) {
+    std::string out = exec_git_cmd(repo_root, "status --porcelain=v1");
+    std::istringstream iss(out);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.size() >= 2) {
+            char x = line[0];
+            char y = line[1];
+            if (x != '?' || y != '?') {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool git_stage_file(const std::string& repo_root, const std::string& rel_path) {
+    std::string cmd = "add -- \"" + rel_path + "\"";
+    return run_git_cmd_status(repo_root, cmd) == 0;
+}
+
+bool git_unstage_file(const std::string& repo_root, const std::string& rel_path) {
+    std::string cmd = "reset HEAD -- \"" + rel_path + "\"";
+    int res = run_git_cmd_status(repo_root, cmd);
+    if (res != 0) {
+        cmd = "rm --cached -- \"" + rel_path + "\"";
+        res = run_git_cmd_status(repo_root, cmd);
+    }
+    return res == 0;
+}
+
+bool git_checkout_branch(const std::string& repo_root, const std::string& branch_name) {
+    std::string cmd = "checkout \"" + branch_name + "\"";
+    return run_git_cmd_status(repo_root, cmd) == 0;
+}
+
+bool git_stash_push(const std::string& repo_root) {
+    return run_git_cmd_status(repo_root, "stash push") == 0;
+}
+
+bool git_stash_pop(const std::string& repo_root, int stash_idx) {
+    std::string cmd = "stash pop stash@{" + std::to_string(stash_idx) + "}";
+    return run_git_cmd_status(repo_root, cmd) == 0;
+}
+
+bool git_stash_drop(const std::string& repo_root, int stash_idx) {
+    std::string cmd = "stash drop stash@{" + std::to_string(stash_idx) + "}";
+    return run_git_cmd_status(repo_root, cmd) == 0;
+}
+
+std::vector<std::string> git_get_file_lines(const std::string& repo_root,
+                                            const std::string& rev,
+                                            const std::string& rel_path) {
+    std::vector<std::string> lines;
+    if (rev == "WORKING") {
+        std::string full_path = (fs::path(repo_root) / rel_path).lexically_normal().string();
+        std::ifstream in(full_path);
+        if (in.is_open()) {
+            std::string line;
+            while (std::getline(in, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                lines.push_back(line);
+            }
+        }
+        return lines;
+    }
+
+    std::string arg;
+    if (rev == "INDEX") {
+        arg = "show :\"" + rel_path + "\"";
+    } else {
+        arg = "show \"" + rev + ":" + rel_path + "\"";
+    }
+    std::string content = exec_git_cmd(repo_root, arg);
+    std::istringstream iss(content);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+    }
+    return lines;
 }

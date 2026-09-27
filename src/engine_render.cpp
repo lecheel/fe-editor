@@ -52,7 +52,12 @@ void VimEngine::render() {
         }
     }
 
-    if (show_mini_help) {
+    if (show_git_status) {
+        render_git_status(screen_h, screen_w);
+        if (!git_stash_action_active) {
+            notcurses_cursor_disable(nc);
+        }
+    } else if (show_mini_help) {
         render_mini_help(screen_h, screen_w);
         notcurses_cursor_disable(nc);
     } else if (show_buffer_list) {
