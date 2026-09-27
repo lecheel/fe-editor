@@ -113,7 +113,10 @@ private:
     std::chrono::steady_clock::time_point leader_start_time;
 
     bool show_buffer_list{false};
+    std::string buffer_list_query;
+    std::vector<size_t> buffer_list_filtered_indices;
     int buffer_list_selected_idx{0};
+    int buffer_list_scroll{0};
 
     bool show_cmd_completion{false};
     std::string cmd_completion_prefix;
@@ -216,6 +219,7 @@ public:
     void prev_buffer();
     void switch_to_buffer(size_t idx);
     void open_buffer_list();
+    void filter_buffer_list();
     void handle_buffer_list_input(const ncinput& ni, uint32_t key);
     void render_buffer_list(unsigned int screen_h, unsigned int screen_w);
 
