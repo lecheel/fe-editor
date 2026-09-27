@@ -174,7 +174,25 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
 
     config.load();
 
-    auto file_targets = parse_file_location_args(files);
+    bool delta_mode = false;
+    std::vector<std::string> filtered_files;
+    for (const auto& f : files) {
+        if (f == "--delta" || f == "-d" || f == "--diff") {
+            delta_mode = true;
+        } else if (f.rfind("--delta=", 0) == 0) {
+            delta_mode = true;
+            std::string r = f.substr(8);
+            if (!r.empty()) filtered_files.push_back(r);
+        } else if (f.rfind("--diff=", 0) == 0) {
+            delta_mode = true;
+            std::string r = f.substr(7);
+            if (!r.empty()) filtered_files.push_back(r);
+        } else {
+            filtered_files.push_back(f);
+        }
+    }
+
+    auto file_targets = parse_file_location_args(filtered_files);
 
     project_dir = detect_project_dir(!file_targets.empty() ? file_targets[0].path : "");
     try {
@@ -234,6 +252,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   In Search Popup: [j/k/Up/Down] navigate matches, [{/}] file groups, [Enter] open",
             "",
             "// --- Git Hunks & Realtime Memory Gutter ----------------------------------",
+            "//   fe -d f1 f2     Compare two files side-by-side (--delta)",
             "//   Gutter markers: [+] added, [~] modified, [-] deleted (realtime in-memory diff)",
             "//   [F2] / [F3]     Jump to previous / next git hunk",
             "//   [F4]            Open git hunk diff popup",
@@ -277,6 +296,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   [:]             Enter command mode",
             "//   :w [file]       Save file (persists cursor position to config.json)",
             "//   :e <file>       Open or create file",
+            "//   :delta [f1] f2  Compare two files side-by-side (or :diff f1 f2)",
             "//   :b <n> / :bn    Switch buffer by index / next buffer",
             "//   :pwd / :proj    Print project repository root (auto-detected git toplevel)",
             "//   :cd <dir>       Change working directory / project root"
@@ -320,7 +340,19 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
 
     load_rg_cache();
 
-    if (!file_targets.empty() && file_targets[0].line > 0) {
+    if (delta_mode) {
+        if (buffers.size() >= 2) {
+            Window w2;
+            w2.id = next_win_id++;
+            w2.buffer_idx = 1;
+            restore_window_position(w2, *buffers[1]);
+            windows.push_back(w2);
+            split_mode = SplitType::VERTICAL;
+            open_delta_diff(buffers[0], buffers[1]);
+        } else if (!buffers.empty()) {
+            open_hunk_diff();
+        }
+    } else if (!file_targets.empty() && file_targets[0].line > 0) {
         set_info_msg("\"" + buffers[0]->name + "\" [" +
                      std::to_string(w.cursors.front().y + 1) + ":" +
                      std::to_string(w.cursors.front().x + 1) + "]");

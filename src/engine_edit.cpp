@@ -151,9 +151,34 @@ REGISTER_COMMAND(
 REGISTER_COMMAND(
     hunkdiff,
     (std::vector<std::string>{"hunkdiff", "diff"}),
-    "Toggle F14 side-by-side hunk diff view against HEAD (F5)",
+    "Toggle side-by-side diff against HEAD (F5) or compare files (:diff file1 file2)",
     [](CommandContext& ctx) {
-        ctx.engine.open_hunk_diff();
+        if (ctx.argv.size() >= 2) {
+            ctx.engine.open_file_diff(ctx.argv[0], ctx.argv[1]);
+        } else if (ctx.argv.size() == 1) {
+            auto& b = ctx.engine.active_buf();
+            std::string left = !b.file_path.empty() ? b.file_path : b.name;
+            ctx.engine.open_file_diff(left, ctx.argv[0]);
+        } else {
+            ctx.engine.open_hunk_diff();
+        }
+    }
+);
+
+REGISTER_COMMAND(
+    delta,
+    (std::vector<std::string>{"delta", "diffsplit", "vdiff"}),
+    "Compare two files side-by-side (:delta file1 file2)",
+    [](CommandContext& ctx) {
+        if (ctx.argv.size() >= 2) {
+            ctx.engine.open_file_diff(ctx.argv[0], ctx.argv[1]);
+        } else if (ctx.argv.size() == 1) {
+            auto& b = ctx.engine.active_buf();
+            std::string left = !b.file_path.empty() ? b.file_path : b.name;
+            ctx.engine.open_file_diff(left, ctx.argv[0]);
+        } else {
+            ctx.engine.open_hunk_diff();
+        }
     }
 );
 

@@ -90,9 +90,14 @@ private:
     int git_stash_action_idx{0};
     std::string git_stash_status_msg;
 
-    // F14 full-screen side-by-side hunk diff state
+    // F14 full-screen side-by-side hunk diff / delta diff state
     bool show_hunk_diff{false};
-    std::string hunk_diff_focus{"left"}; // "left" (Working) or "right" (HEAD)
+    bool hunk_diff_is_delta{false};
+    std::string hunk_diff_left_name;
+    std::string hunk_diff_right_name;
+    std::shared_ptr<TextBuffer> hunk_diff_left_buf{nullptr};
+    std::shared_ptr<TextBuffer> hunk_diff_right_buf{nullptr};
+    std::string hunk_diff_focus{"left"}; // "left" (Working/file1) or "right" (HEAD/file2)
     int hunk_diff_cursor_row{0};
     int hunk_diff_scroll_y{0};
     std::string hunk_diff_status_msg;
@@ -196,6 +201,8 @@ public:
     void render_git_status(unsigned int screen_h, unsigned int screen_w);
 
     void open_hunk_diff();
+    void open_delta_diff(std::shared_ptr<TextBuffer> left_buf, std::shared_ptr<TextBuffer> right_buf);
+    void open_file_diff(const std::string& path1, const std::string& path2);
     void close_hunk_diff();
     void handle_hunk_diff_input(const ncinput& ni, uint32_t key);
     void render_hunk_diff(unsigned int screen_h, unsigned int screen_w);

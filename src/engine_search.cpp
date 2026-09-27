@@ -830,6 +830,12 @@ void VimEngine::open_hunk_diff() {
         return;
     }
 
+    hunk_diff_is_delta = false;
+    hunk_diff_left_buf = nullptr;
+    hunk_diff_right_buf = nullptr;
+    hunk_diff_left_name = !buf.name.empty() ? buf.name : "buffer";
+    hunk_diff_right_name = "HEAD";
+
     hunk_diff_head_lines = buf.git_base_lines;
     hunk_diff_head_syntax = std::make_shared<SyntaxHighlighter>();
     hunk_diff_head_syntax->init_for_file(!buf.file_path.empty() ? buf.file_path : buf.name);
@@ -860,9 +866,98 @@ void VimEngine::open_hunk_diff() {
     set_info_msg("");
 }
 
+void VimEngine::open_delta_diff(std::shared_ptr<TextBuffer> left_buf, std::shared_ptr<TextBuffer> right_buf) {
+    if (!left_buf || !right_buf) {
+        set_info_msg("Delta diff requires two files");
+        return;
+    }
+
+    show_filepicker = false;
+    show_settings_popup = false;
+    show_git_hunk_popup = false;
+    show_whichkey_popup = false;
+    show_buffer_list = false;
+    show_rg_popup = false;
+    show_git_status = false;
+
+    hunk_diff_is_delta = true;
+    hunk_diff_left_buf = left_buf;
+    hunk_diff_right_buf = right_buf;
+    hunk_diff_left_name = !left_buf->name.empty() ? left_buf->name : left_buf->file_path;
+    hunk_diff_right_name = !right_buf->name.empty() ? right_buf->name : right_buf->file_path;
+
+    hunk_diff_head_lines = right_buf->lines;
+    hunk_diff_head_syntax = std::make_shared<SyntaxHighlighter>();
+    hunk_diff_head_syntax->init_for_file(!right_buf->file_path.empty() ? right_buf->file_path : right_buf->name);
+    hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+
+    hunk_diff_diff = compute_aligned_diff(left_buf->lines, right_buf->lines);
+    hunk_diff_focus = "left";
+    hunk_diff_status_msg.clear();
+
+    manual_left_active = false;
+    manual_left_start = -1;
+    manual_left_end = -1;
+    manual_right_active = false;
+    manual_right_start = -1;
+    manual_right_end = -1;
+
+    hunk_diff_cursor_row = 0;
+    if (!hunk_diff_diff.hunks.empty()) {
+        hunk_diff_cursor_row = hunk_diff_diff.hunks.front().first_row;
+    }
+    hunk_diff_scroll_y = 0;
+    show_hunk_diff = true;
+
+    set_info_msg("Delta: " + hunk_diff_left_name + " ↔ " + hunk_diff_right_name +
+                 " (" + std::to_string(hunk_diff_diff.hunks.size()) + " hunks)");
+}
+
+void VimEngine::open_file_diff(const std::string& path1, const std::string& path2) {
+    if (path1.empty() || path2.empty()) {
+        set_info_msg("Delta diff requires two files: :delta <file1> <file2>");
+        return;
+    }
+
+    std::string full_p1 = path1;
+    std::string full_p2 = path2;
+    std::string root = !project_dir.empty() ? project_dir : ".";
+
+    std::error_code ec;
+    if (fs::exists(fs::path(root) / path1, ec)) {
+        full_p1 = (fs::path(root) / path1).lexically_normal().string();
+    }
+    if (fs::exists(fs::path(root) / path2, ec)) {
+        full_p2 = (fs::path(root) / path2).lexically_normal().string();
+    }
+
+    std::shared_ptr<TextBuffer> b1 = nullptr;
+    std::shared_ptr<TextBuffer> b2 = nullptr;
+
+    for (const auto& b : buffers) {
+        if (b->file_path == full_p1 || b->name == path1 || b->file_path == path1) {
+            b1 = b;
+        }
+        if (b->file_path == full_p2 || b->name == path2 || b->file_path == path2) {
+            b2 = b;
+        }
+    }
+
+    if (!b1) {
+        b1 = TextBuffer::from_file(full_p1);
+        buffers.push_back(b1);
+    }
+    if (!b2) {
+        b2 = TextBuffer::from_file(full_p2);
+        buffers.push_back(b2);
+    }
+
+    open_delta_diff(b1, b2);
+}
+
 void VimEngine::close_hunk_diff() {
     show_hunk_diff = false;
-    auto& buf = active_buf();
+    auto& buf = (hunk_diff_is_delta && hunk_diff_left_buf) ? *hunk_diff_left_buf : active_buf();
     auto& win = active_win();
     if (hunk_diff_cursor_row >= 0 && hunk_diff_cursor_row < static_cast<int>(hunk_diff_diff.rows.size())) {
         int l_idx = hunk_diff_diff.rows[hunk_diff_cursor_row].left_idx;
@@ -872,11 +967,14 @@ void VimEngine::close_hunk_diff() {
             update_window_scroll(win, buf);
         }
     }
+    hunk_diff_is_delta = false;
+    hunk_diff_left_buf = nullptr;
+    hunk_diff_right_buf = nullptr;
     set_info_msg("");
 }
 
 void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
-    auto& buf = active_buf();
+    auto& buf = (hunk_diff_is_delta && hunk_diff_left_buf) ? *hunk_diff_left_buf : active_buf();
     auto& win = active_win();
     const auto& diff = hunk_diff_diff;
 
@@ -1010,7 +1108,7 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
     }
 
     if (key == 'p') {
-        if (hunk_diff_focus == "right") {
+        if (hunk_diff_focus == "right" && !hunk_diff_is_delta) {
             hunk_diff_status_msg = "Cannot paste into HEAD: HEAD is read-only";
             return;
         }
@@ -1020,6 +1118,34 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
         }
         if (hunk_diff_cursor_row < 0 || hunk_diff_cursor_row >= static_cast<int>(diff.rows.size())) return;
         const auto& row = diff.rows[hunk_diff_cursor_row];
+
+        if (hunk_diff_focus == "right" && hunk_diff_is_delta && hunk_diff_right_buf) {
+            int target_y = -1;
+            if (row.right_idx >= 0) {
+                target_y = row.right_idx + 1;
+            } else {
+                for (int r = hunk_diff_cursor_row - 1; r >= 0; --r) {
+                    if (diff.rows[r].right_idx >= 0) {
+                        target_y = diff.rows[r].right_idx + 1;
+                        break;
+                    }
+                }
+                if (target_y == -1) target_y = 0;
+            }
+            hunk_diff_right_buf->push_undo(win.cursors);
+            int ins_pos = std::clamp(target_y, 0, static_cast<int>(hunk_diff_right_buf->lines.size()));
+            hunk_diff_right_buf->lines.insert(hunk_diff_right_buf->lines.begin() + ins_pos, yank_reg.lines.begin(), yank_reg.lines.end());
+            hunk_diff_right_buf->modified = true;
+            hunk_diff_right_buf->version++;
+            hunk_diff_right_buf->invalidate_hunks();
+            if (hunk_diff_right_buf->syntax) hunk_diff_right_buf->syntax->update_text(hunk_diff_right_buf->lines);
+            hunk_diff_head_lines = hunk_diff_right_buf->lines;
+            if (hunk_diff_head_syntax) hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            hunk_diff_status_msg = "Pasted line into " + hunk_diff_right_name;
+            return;
+        }
+
         int target_y = -1;
         if (row.left_idx >= 0) {
             target_y = row.left_idx + 1;
@@ -1040,17 +1166,42 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
         buf.invalidate_hunks();
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
-        hunk_diff_status_msg = "Pasted line below cursor";
+        hunk_diff_status_msg = "Pasted line below cursor in " + (hunk_diff_is_delta ? hunk_diff_left_name : "working buffer");
         return;
     }
 
     if (key == 'd') {
-        if (hunk_diff_focus == "right") {
+        if (hunk_diff_focus == "right" && !hunk_diff_is_delta) {
             hunk_diff_status_msg = "Cannot delete from HEAD: HEAD is read-only";
             return;
         }
         if (hunk_diff_cursor_row < 0 || hunk_diff_cursor_row >= static_cast<int>(diff.rows.size())) return;
         const auto& row = diff.rows[hunk_diff_cursor_row];
+
+        if (hunk_diff_focus == "right" && hunk_diff_is_delta && hunk_diff_right_buf) {
+            if (row.right_idx < 0 || row.right_idx >= static_cast<int>(hunk_diff_right_buf->lines.size())) {
+                hunk_diff_status_msg = "Cannot delete padding row";
+                return;
+            }
+            hunk_diff_right_buf->push_undo(win.cursors);
+            int del_y = row.right_idx;
+            if (hunk_diff_right_buf->lines.size() > 1) {
+                hunk_diff_right_buf->lines.erase(hunk_diff_right_buf->lines.begin() + del_y);
+            } else {
+                hunk_diff_right_buf->lines[0] = "";
+            }
+            hunk_diff_right_buf->modified = true;
+            hunk_diff_right_buf->version++;
+            hunk_diff_right_buf->invalidate_hunks();
+            if (hunk_diff_right_buf->syntax) hunk_diff_right_buf->syntax->update_text(hunk_diff_right_buf->lines);
+            hunk_diff_head_lines = hunk_diff_right_buf->lines;
+            if (hunk_diff_head_syntax) hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+            hunk_diff_status_msg = "Deleted line from " + hunk_diff_right_name;
+            return;
+        }
+
         if (row.left_idx < 0 || row.left_idx >= static_cast<int>(buf.lines.size())) {
             hunk_diff_status_msg = "Cannot delete padding row";
             return;
@@ -1068,7 +1219,7 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
         hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
-        hunk_diff_status_msg = "Deleted line from working buffer";
+        hunk_diff_status_msg = "Deleted line from " + (hunk_diff_is_delta ? hunk_diff_left_name : "working buffer");
         return;
     }
 
@@ -1081,7 +1232,7 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
                              (hunk_diff_focus == "right" && !is_push);
 
         // HEAD is readonly: any operation attempting to modify HEAD is ignored with a warning message
-        if (left_to_right) {
+        if (left_to_right && (!hunk_diff_is_delta || !hunk_diff_right_buf)) {
             hunk_diff_status_msg = "Cannot modify HEAD: HEAD is read-only";
             return;
         }
@@ -1164,13 +1315,41 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
             return;
         }
 
-        // Standard hunk apply if not in manual marker (HEAD -> Working)
+        // Standard hunk apply if not in manual marker
         const auto& row = diff.rows[hunk_diff_cursor_row];
         if (row.hunk_idx == -1 || row.hunk_idx >= static_cast<int>(diff.hunks.size())) {
             hunk_diff_status_msg = "No hunk at cursor to apply";
             return;
         }
         const auto& hunk = diff.hunks[row.hunk_idx];
+
+        if (left_to_right && hunk_diff_is_delta && hunk_diff_right_buf) {
+            hunk_diff_right_buf->push_undo(win.cursors);
+            int r_start = hunk.right_start;
+            int r_count = hunk.right_count;
+            if (r_start < static_cast<int>(hunk_diff_right_buf->lines.size())) {
+                int erase_cnt = std::min(r_count, static_cast<int>(hunk_diff_right_buf->lines.size()) - r_start);
+                hunk_diff_right_buf->lines.erase(hunk_diff_right_buf->lines.begin() + r_start,
+                                                 hunk_diff_right_buf->lines.begin() + r_start + erase_cnt);
+            }
+            if (!hunk.left_lines.empty()) {
+                int ins_pos = std::min(r_start, static_cast<int>(hunk_diff_right_buf->lines.size()));
+                hunk_diff_right_buf->lines.insert(hunk_diff_right_buf->lines.begin() + ins_pos,
+                                                  hunk.left_lines.begin(), hunk.left_lines.end());
+            }
+            if (hunk_diff_right_buf->lines.empty()) hunk_diff_right_buf->lines.push_back("");
+            hunk_diff_right_buf->modified = true;
+            hunk_diff_right_buf->version++;
+            hunk_diff_right_buf->invalidate_hunks();
+            if (hunk_diff_right_buf->syntax) hunk_diff_right_buf->syntax->update_text(hunk_diff_right_buf->lines);
+            hunk_diff_head_lines = hunk_diff_right_buf->lines;
+            if (hunk_diff_head_syntax) hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            hunk_diff_status_msg = "Pushed hunk #" + std::to_string(hunk.id + 1) + " from " +
+                                   hunk_diff_left_name + " → " + hunk_diff_right_name;
+            hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+            return;
+        }
 
         buf.push_undo(win.cursors);
         int l_start = hunk.left_start;
@@ -1189,16 +1368,31 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
         buf.invalidate_hunks();
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
-        hunk_diff_status_msg = "Applied hunk #" + std::to_string(hunk.id + 1) + " from HEAD to working";
+        hunk_diff_status_msg = hunk_diff_is_delta ?
+            ("Pulled hunk #" + std::to_string(hunk.id + 1) + " from " + hunk_diff_right_name + " → " + hunk_diff_left_name) :
+            ("Applied hunk #" + std::to_string(hunk.id + 1) + " from HEAD to working");
         hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
         return;
     }
 
     if (key == 'u') {
+        if (hunk_diff_is_delta && hunk_diff_right_buf && hunk_diff_focus == "right") {
+            if (hunk_diff_right_buf->undo(win.cursors)) {
+                hunk_diff_head_lines = hunk_diff_right_buf->lines;
+                if (hunk_diff_head_syntax) hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+                hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+                hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+                hunk_diff_status_msg = "Undo applied to " + hunk_diff_right_name;
+            } else {
+                hunk_diff_status_msg = "Already at oldest change for " + hunk_diff_right_name;
+            }
+            return;
+        }
+
         if (buf.undo(win.cursors)) {
             hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
             hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
-            hunk_diff_status_msg = "Undo applied";
+            hunk_diff_status_msg = "Undo applied to " + (hunk_diff_is_delta ? hunk_diff_left_name : "working");
         } else {
             hunk_diff_status_msg = "Already at oldest change";
         }
@@ -1206,10 +1400,18 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
     }
 
     if (key == 'w' || key == 19 || (ni.ctrl && (key == 's' || key == 'S' || ni.id == 's' || ni.id == 'S'))) {
-        if (buf.save_to_file()) {
-            hunk_diff_status_msg = "\"" + buf.name + "\" written";
+        if (hunk_diff_is_delta && hunk_diff_right_buf && hunk_diff_focus == "right") {
+            if (hunk_diff_right_buf->save_to_file()) {
+                hunk_diff_status_msg = "\"" + hunk_diff_right_buf->name + "\" written";
+            } else {
+                hunk_diff_status_msg = "E212: Can't open file for writing";
+            }
         } else {
-            hunk_diff_status_msg = "E212: Can't open file for writing";
+            if (buf.save_to_file()) {
+                hunk_diff_status_msg = "\"" + buf.name + "\" written";
+            } else {
+                hunk_diff_status_msg = "E212: Can't open file for writing";
+            }
         }
         return;
     }
@@ -1255,17 +1457,30 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
     ncplane_putstr_yx(stdplane, header_sep_y, popup_x + popup_w - 1, "┤");
 
     // Title on top border (following F11 vg title style)
-    std::string title = " Hunk Diff View (F5 / :diff) ";
+    std::string title = hunk_diff_is_delta ?
+        (" Delta Diff: " + hunk_diff_left_name + " ↔ " + hunk_diff_right_name + " ") :
+        " Hunk Diff View (F5 / :diff) ";
     ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 
     // Header info (row popup_y + 1)
-    auto& buf = active_buf();
+    auto& buf = (hunk_diff_is_delta && hunk_diff_left_buf) ? *hunk_diff_left_buf : active_buf();
     std::string disp_file = !buf.name.empty() ? buf.name : "buffer";
     ncplane_set_fg_rgb8(stdplane, 240, 200, 80);
-    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "📄 File:    ");
-    ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, disp_file.c_str());
+    if (hunk_diff_is_delta) {
+        ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "📄 Compare: ");
+        ncplane_set_fg_rgb8(stdplane, 100, 220, 255);
+        ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, hunk_diff_left_name.c_str());
+        int mid_x = popup_x + 14 + static_cast<int>(hunk_diff_left_name.size()) + 1;
+        ncplane_set_fg_rgb8(stdplane, 180, 180, 190);
+        ncplane_putstr_yx(stdplane, popup_y + 1, mid_x, "↔");
+        ncplane_set_fg_rgb8(stdplane, 255, 140, 180);
+        ncplane_putstr_yx(stdplane, popup_y + 1, mid_x + 2, hunk_diff_right_name.c_str());
+    } else {
+        ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "📄 File:    ");
+        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, disp_file.c_str());
+    }
 
     const auto& diff = hunk_diff_diff;
     int total_rows = static_cast<int>(diff.rows.size());
@@ -1278,7 +1493,13 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
         }
     }
 
-    std::string focus_str = (hunk_diff_focus == "left") ? "Working" : "HEAD (read-only)";
+    std::string focus_str;
+    if (hunk_diff_is_delta) {
+        focus_str = (hunk_diff_focus == "left") ? (hunk_diff_left_name + " [left]")
+                                                : (hunk_diff_right_name + " [right]");
+    } else {
+        focus_str = (hunk_diff_focus == "left") ? "Working" : "HEAD (read-only)";
+    }
     char stats_buf[200];
     std::string marker_info;
     if (manual_left_active && manual_right_active) {
@@ -1582,7 +1803,7 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
                 ncplane_putstr_yx(stdplane, draw_y, right_text_x, "~");
             } else {
                 const std::string& line = diff.right_lines[arow.right_idx];
-                if (config.settings.hunk_diff_right_syntax) {
+                if (config.settings.hunk_diff_right_syntax || hunk_diff_is_delta) {
                     std::vector<SyntaxStyle> r_styles;
                     if (hunk_diff_head_syntax) {
                         r_styles = hunk_diff_head_syntax->get_line_styles(arow.right_idx, line);

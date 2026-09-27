@@ -9,6 +9,7 @@ static void print_help(const char* prog_name) {
               << "  +<line>[:<col>] file     Open file at line (and optional column)\n"
               << "  file:<line>[:<col>]      Open file at line (and optional column)\n\n"
               << "Options:\n"
+              << "  -d, --delta              Compare two files side-by-side (or file vs HEAD)\n"
               << "  -v, --verbose            Enable verbose debug logging (fe_debug.log)\n"
               << "  -h, --help               Display this help message and exit\n\n";
 }
