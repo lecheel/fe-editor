@@ -26,6 +26,128 @@ REGISTER_COMMAND(
     }
 );
 
+struct IndentInfo {
+    bool use_tabs{false};
+    int tab_size{4};
+    std::string unit{"    "};
+};
+
+inline IndentInfo get_indent_info_for_lang(const std::string& lang) {
+    IndentInfo info;
+    if (lang == "go") {
+        info.use_tabs = true;
+        info.tab_size = 4;
+        info.unit = "\t";
+    } else if (lang == "json" || lang == "yaml" || lang == "yml" ||
+               lang == "html" || lang == "css" || lang == "toml" ||
+               lang == "javascript" || lang == "typescript" || lang == "lua") {
+        info.use_tabs = false;
+        info.tab_size = 2;
+        info.unit = "  ";
+    } else {
+        info.use_tabs = false;
+        info.tab_size = 4;
+        info.unit = "    ";
+    }
+    return info;
+}
+
+inline std::string compute_line_indent(const std::vector<std::string>& lines, int line_idx, const std::string& lang) {
+    if (line_idx <= 0 || lines.empty()) return "";
+    IndentInfo info = get_indent_info_for_lang(lang);
+
+    int prev_idx = line_idx - 1;
+    while (prev_idx >= 0) {
+        bool all_space = true;
+        for (char c : lines[prev_idx]) {
+            if (!std::isspace(static_cast<unsigned char>(c))) {
+                all_space = false;
+                break;
+            }
+        }
+        if (!all_space) break;
+        prev_idx--;
+    }
+    if (prev_idx < 0) return "";
+
+    const std::string& prev = lines[prev_idx];
+    size_t p = 0;
+    while (p < prev.size() && (prev[p] == ' ' || prev[p] == '\t')) p++;
+    std::string base_indent = prev.substr(0, p);
+    std::string trimmed_prev = prev.substr(p);
+
+    if (lang == "python" || lang == "bash") {
+        size_t h = trimmed_prev.find('#');
+        if (h != std::string::npos) trimmed_prev = trimmed_prev.substr(0, h);
+    } else {
+        size_t c = trimmed_prev.find("//");
+        if (c != std::string::npos) trimmed_prev = trimmed_prev.substr(0, c);
+    }
+    while (!trimmed_prev.empty() && std::isspace(static_cast<unsigned char>(trimmed_prev.back()))) {
+        trimmed_prev.pop_back();
+    }
+
+    if (!trimmed_prev.empty()) {
+        char b = trimmed_prev.back();
+        if (b == '{' || b == '(' || b == '[' || (lang == "python" && b == ':')) {
+            base_indent += info.unit;
+        }
+    }
+
+    if (line_idx < static_cast<int>(lines.size())) {
+        const std::string& cur = lines[line_idx];
+        size_t cp = 0;
+        while (cp < cur.size() && (cur[cp] == ' ' || cur[cp] == '\t')) cp++;
+        std::string trimmed_cur = cur.substr(cp);
+
+        if (!trimmed_cur.empty() && (trimmed_cur[0] == '}' || trimmed_cur[0] == ')' || trimmed_cur[0] == ']')) {
+            if (base_indent.size() >= info.unit.size() &&
+                base_indent.compare(base_indent.size() - info.unit.size(), info.unit.size(), info.unit) == 0) {
+                base_indent.erase(base_indent.size() - info.unit.size());
+            } else if (base_indent.size() >= static_cast<size_t>(info.tab_size)) {
+                base_indent.erase(base_indent.size() - info.tab_size);
+            }
+        } else if (lang == "python" && !trimmed_cur.empty()) {
+            if (trimmed_cur.rfind("elif", 0) == 0 ||
+                trimmed_cur.rfind("else:", 0) == 0 ||
+                trimmed_cur.rfind("except", 0) == 0 ||
+                trimmed_cur.rfind("finally:", 0) == 0) {
+                if (base_indent.size() >= info.unit.size()) {
+                    base_indent.erase(base_indent.size() - info.unit.size());
+                }
+            }
+        }
+    }
+
+    return base_indent;
+}
+
+REGISTER_COMMAND(
+    indent,
+    (std::vector<std::string>{"indent", "retab"}),
+    "Reindent entire file according to filetype",
+    [](CommandContext& ctx) {
+        auto& win = ctx.engine.active_win();
+        auto& buf = ctx.engine.active_buf();
+        buf.push_undo(win.cursors);
+        std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+        if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+        for (int y = 0; y < static_cast<int>(buf.lines.size()); ++y) {
+            std::string ind = compute_line_indent(buf.lines, y, lang);
+            size_t p = 0;
+            while (p < buf.lines[y].size() && (buf.lines[y][p] == ' ' || buf.lines[y][p] == '\t')) p++;
+            buf.lines[y] = ind + buf.lines[y].substr(p);
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.clamp_all_cursors(buf, Mode::NORMAL);
+        ctx.engine.update_window_scroll(win, buf);
+        ctx.engine.set_info_msg("Reindented entire file (" + std::to_string(buf.lines.size()) + " lines)");
+    }
+);
+
 REGISTER_COMMAND(
     hunkdiff,
     (std::vector<std::string>{"hunkdiff", "diff"}),
@@ -62,6 +184,9 @@ bool s_dg_pending = false;
 bool s_y_pending = false;
 bool s_g_pending = false;
 bool s_visual_g_pending = false;
+bool s_equal_pending = false;
+bool s_greater_pending = false;
+bool s_less_pending = false;
 
 int compute_dw_end(const std::string& line, int cx) {
     int len = static_cast<int>(line.size());
@@ -364,6 +489,130 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         }
     }
 
+    if (s_equal_pending) {
+        s_equal_pending = false;
+        if (key == '=' || key == 'e') {
+            buf.push_undo(win.cursors);
+            std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+            if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+            std::set<int> lines_to_indent;
+            for (const auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    lines_to_indent.insert(c.y);
+                }
+            }
+            for (int y : lines_to_indent) {
+                std::string ind = compute_line_indent(buf.lines, y, lang);
+                size_t p = 0;
+                while (p < buf.lines[y].size() && (buf.lines[y][p] == ' ' || buf.lines[y][p] == '\t')) p++;
+                buf.lines[y] = ind + buf.lines[y].substr(p);
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Reindented line(s) (==)");
+            return;
+        } else if (key == 'G' || ni.id == 'G' || (ni.shift && (key == 'g' || ni.id == 'g'))) {
+            buf.push_undo(win.cursors);
+            std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+            if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+            int start_y = win.cursors.empty() ? 0 : win.cursors.front().y;
+            int end_y = static_cast<int>(buf.lines.size()) - 1;
+            for (int y = start_y; y <= end_y; ++y) {
+                std::string ind = compute_line_indent(buf.lines, y, lang);
+                size_t p = 0;
+                while (p < buf.lines[y].size() && (buf.lines[y][p] == ' ' || buf.lines[y][p] == '\t')) p++;
+                buf.lines[y] = ind + buf.lines[y].substr(p);
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Reindented to end of file (=G)");
+            return;
+        } else {
+            set_info_msg("");
+            if (key == NCKEY_ESC) return;
+        }
+    }
+
+    if (s_greater_pending) {
+        s_greater_pending = false;
+        if (key == '>' || (ni.shift && (key == '.' || ni.id == '.'))) {
+            buf.push_undo(win.cursors);
+            std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+            if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+            IndentInfo info = get_indent_info_for_lang(lang);
+            std::set<int> lines_to_shift;
+            for (const auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    lines_to_shift.insert(c.y);
+                }
+            }
+            for (int y : lines_to_shift) {
+                buf.lines[y] = info.unit + buf.lines[y];
+            }
+            for (auto& c : win.cursors) {
+                c.x += static_cast<int>(info.unit.size());
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Indented line (>>)");
+            return;
+        } else {
+            set_info_msg("");
+            if (key == NCKEY_ESC) return;
+        }
+    }
+
+    if (s_less_pending) {
+        s_less_pending = false;
+        if (key == '<' || (ni.shift && (key == ',' || ni.id == ','))) {
+            buf.push_undo(win.cursors);
+            std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+            if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+            IndentInfo info = get_indent_info_for_lang(lang);
+            std::set<int> lines_to_shift;
+            for (const auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    lines_to_shift.insert(c.y);
+                }
+            }
+            for (int y : lines_to_shift) {
+                std::string& l = buf.lines[y];
+                if (l.rfind(info.unit, 0) == 0) {
+                    l.erase(0, info.unit.size());
+                } else if (!l.empty() && l[0] == '\t') {
+                    l.erase(0, 1);
+                } else {
+                    size_t sp = 0;
+                    while (sp < l.size() && l[sp] == ' ' && sp < static_cast<size_t>(info.tab_size)) sp++;
+                    if (sp > 0) l.erase(0, sp);
+                }
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Unindented line (<<)");
+            return;
+        } else {
+            set_info_msg("");
+            if (key == NCKEY_ESC) return;
+        }
+    }
+
     if (s_g_pending) {
         s_g_pending = false;
         if (key == 'g') {
@@ -625,18 +874,74 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
                 c.x = std::min(static_cast<int>(buf.lines[c.y].size()), c.x + 1);
             }
             break;
-        case 'o':
+        case 'o': {
             buf.push_undo(win.cursors);
+            std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+            if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+            IndentInfo info = get_indent_info_for_lang(lang);
+
             for (auto& c : win.cursors) {
-                buf.lines.insert(buf.lines.begin() + c.y + 1, "");
+                std::string indent = "";
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    const std::string& cur = buf.lines[c.y];
+                    size_t p = 0;
+                    while (p < cur.size() && (cur[p] == ' ' || cur[p] == '\t')) p++;
+                    indent = cur.substr(0, p);
+                    std::string trimmed = cur.substr(p);
+                    while (!trimmed.empty() && std::isspace(static_cast<unsigned char>(trimmed.back()))) trimmed.pop_back();
+                    if (!trimmed.empty()) {
+                        char b = trimmed.back();
+                        if (b == '{' || b == '(' || b == '[' || (lang == "python" && b == ':')) {
+                            indent += info.unit;
+                        }
+                    }
+                }
+                buf.lines.insert(buf.lines.begin() + c.y + 1, indent);
                 c.y++;
-                c.x = 0;
+                c.x = static_cast<int>(indent.size());
             }
             buf.modified = true;
             buf.version++;
             buf.invalidate_hunks();
             if (buf.syntax) buf.syntax->update_text(buf.lines);
+            win.clamp_all_cursors(buf, Mode::INSERT);
+            update_window_scroll(win, buf);
             mode = Mode::INSERT;
+            break;
+        }
+        case 'O': {
+            buf.push_undo(win.cursors);
+            for (auto& c : win.cursors) {
+                std::string indent = "";
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    const std::string& cur = buf.lines[c.y];
+                    size_t p = 0;
+                    while (p < cur.size() && (cur[p] == ' ' || cur[p] == '\t')) p++;
+                    indent = cur.substr(0, p);
+                }
+                buf.lines.insert(buf.lines.begin() + c.y, indent);
+                c.x = static_cast<int>(indent.size());
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            win.clamp_all_cursors(buf, Mode::INSERT);
+            update_window_scroll(win, buf);
+            mode = Mode::INSERT;
+            break;
+        }
+        case '=':
+            s_equal_pending = true;
+            set_info_msg("=");
+            break;
+        case '>':
+            s_greater_pending = true;
+            set_info_msg(">");
+            break;
+        case '<':
+            s_less_pending = true;
+            set_info_msg("<");
             break;
     }
 }
@@ -782,6 +1087,83 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
             mode = Mode::NORMAL;
             win.clamp_all_cursors(buf, mode);
             set_info_msg("Block deleted.");
+            break;
+        }
+        case '=': {
+            buf.push_undo(win.cursors);
+            Cursor primary = win.cursors.front();
+            int min_y = std::min(win.visual_anchor.y, primary.y);
+            int max_y = std::max(win.visual_anchor.y, primary.y);
+            std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+            if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+
+            for (int y = min_y; y <= max_y && y < static_cast<int>(buf.lines.size()); ++y) {
+                std::string ind = compute_line_indent(buf.lines, y, lang);
+                size_t p = 0;
+                while (p < buf.lines[y].size() && (buf.lines[y][p] == ' ' || buf.lines[y][p] == '\t')) p++;
+                buf.lines[y] = ind + buf.lines[y].substr(p);
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            mode = Mode::NORMAL;
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Reindented selection (=)");
+            break;
+        }
+        case '>': {
+            buf.push_undo(win.cursors);
+            Cursor primary = win.cursors.front();
+            int min_y = std::min(win.visual_anchor.y, primary.y);
+            int max_y = std::max(win.visual_anchor.y, primary.y);
+            std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+            if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+            IndentInfo info = get_indent_info_for_lang(lang);
+
+            for (int y = min_y; y <= max_y && y < static_cast<int>(buf.lines.size()); ++y) {
+                buf.lines[y] = info.unit + buf.lines[y];
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            mode = Mode::NORMAL;
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Indented selection (>)");
+            break;
+        }
+        case '<': {
+            buf.push_undo(win.cursors);
+            Cursor primary = win.cursors.front();
+            int min_y = std::min(win.visual_anchor.y, primary.y);
+            int max_y = std::max(win.visual_anchor.y, primary.y);
+            std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+            if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+            IndentInfo info = get_indent_info_for_lang(lang);
+
+            for (int y = min_y; y <= max_y && y < static_cast<int>(buf.lines.size()); ++y) {
+                std::string& l = buf.lines[y];
+                if (l.rfind(info.unit, 0) == 0) {
+                    l.erase(0, info.unit.size());
+                } else if (!l.empty() && l[0] == '\t') {
+                    l.erase(0, 1);
+                } else {
+                    size_t sp = 0;
+                    while (sp < l.size() && l[sp] == ' ' && sp < static_cast<size_t>(info.tab_size)) sp++;
+                    if (sp > 0) l.erase(0, sp);
+                }
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            mode = Mode::NORMAL;
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Unindented selection (<)");
             break;
         }
         case 'y': {
@@ -1574,21 +1956,19 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
+    if (key == '\t' || key == NCKEY_TAB) {
         ac.reset();
-        if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
-        std::sort(win.cursors.begin(), win.cursors.end());
-        for (int i = static_cast<int>(win.cursors.size()) - 1; i >= 0; --i) {
-            int cy = win.cursors[i].y;
-            int cx = win.cursors[i].x;
-            std::string& cur = buf.lines[cy];
-            std::string rest = (cx < static_cast<int>(cur.size())) ? cur.substr(cx) : "";
-            cur = cur.substr(0, cx);
-            buf.lines.insert(buf.lines.begin() + cy + 1, rest);
-            win.cursors[i].y++;
-            win.cursors[i].x = 0;
-            for (size_t j = i + 1; j < win.cursors.size(); ++j) {
-                win.cursors[j].y++;
+        buf.push_undo(win.cursors);
+        std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+        if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+        IndentInfo info = get_indent_info_for_lang(lang);
+
+        for (auto& c : win.cursors) {
+            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                std::string& line = buf.lines[c.y];
+                int ins_pos = std::clamp(c.x, 0, static_cast<int>(line.size()));
+                line.insert(ins_pos, info.unit);
+                c.x += static_cast<int>(info.unit.size());
             }
         }
         buf.modified = true;
@@ -1596,15 +1976,126 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         buf.invalidate_hunks();
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         win.deduplicate_cursors();
+        update_window_scroll(win, buf);
+        return;
+    }
+
+    if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
+        ac.reset();
+        if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
+        buf.push_undo(win.cursors);
+        std::sort(win.cursors.begin(), win.cursors.end());
+
+        std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+        if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+        IndentInfo indent_info = get_indent_info_for_lang(lang);
+
+        for (int i = static_cast<int>(win.cursors.size()) - 1; i >= 0; --i) {
+            int cy = win.cursors[i].y;
+            int cx = win.cursors[i].x;
+            std::string& cur = buf.lines[cy];
+
+            size_t lead_len = 0;
+            while (lead_len < cur.size() && (cur[lead_len] == ' ' || cur[lead_len] == '\t')) lead_len++;
+            std::string line_indent = cur.substr(0, lead_len);
+
+            std::string before = (cx <= static_cast<int>(cur.size())) ? cur.substr(0, cx) : cur;
+            std::string after = (cx < static_cast<int>(cur.size())) ? cur.substr(cx) : "";
+
+            std::string trimmed_before = before;
+            while (!trimmed_before.empty() && std::isspace(static_cast<unsigned char>(trimmed_before.back()))) trimmed_before.pop_back();
+            std::string trimmed_after = after;
+            size_t ap = 0;
+            while (ap < trimmed_after.size() && std::isspace(static_cast<unsigned char>(trimmed_after[ap]))) ap++;
+            trimmed_after = trimmed_after.substr(ap);
+
+            bool pair_split = false;
+            if (!trimmed_before.empty() && !trimmed_after.empty()) {
+                char b = trimmed_before.back();
+                char a = trimmed_after.front();
+                if ((b == '{' && a == '}') || (b == '(' && a == ')') || (b == '[' && a == ']')) {
+                    pair_split = true;
+                }
+            }
+
+            bool increase_indent = false;
+            if (!trimmed_before.empty()) {
+                char b = trimmed_before.back();
+                if (b == '{' || b == '(' || b == '[') {
+                    increase_indent = true;
+                } else if (lang == "python" && b == ':') {
+                    increase_indent = true;
+                }
+            }
+
+            if (pair_split) {
+                cur = before;
+                std::string mid = line_indent + indent_info.unit;
+                std::string end = line_indent + after;
+                buf.lines.insert(buf.lines.begin() + cy + 1, mid);
+                buf.lines.insert(buf.lines.begin() + cy + 2, end);
+
+                win.cursors[i].y = cy + 1;
+                win.cursors[i].x = static_cast<int>(mid.size());
+                for (size_t j = i + 1; j < win.cursors.size(); ++j) {
+                    win.cursors[j].y += 2;
+                }
+            } else {
+                std::string next_indent = line_indent;
+                if (increase_indent) {
+                    next_indent += indent_info.unit;
+                }
+                if (!increase_indent && !trimmed_after.empty() &&
+                    (trimmed_after[0] == '}' || trimmed_after[0] == ')' || trimmed_after[0] == ']')) {
+                    if (next_indent.size() >= indent_info.unit.size()) {
+                        next_indent.erase(next_indent.size() - indent_info.unit.size());
+                    }
+                }
+
+                cur = before;
+                std::string new_line = next_indent + after;
+                buf.lines.insert(buf.lines.begin() + cy + 1, new_line);
+
+                win.cursors[i].y = cy + 1;
+                win.cursors[i].x = static_cast<int>(next_indent.size());
+                for (size_t j = i + 1; j < win.cursors.size(); ++j) {
+                    win.cursors[j].y++;
+                }
+            }
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.deduplicate_cursors();
+        update_window_scroll(win, buf);
         return;
     }
 
     if (key == NCKEY_BACKSPACE || key == 127 || key == '\b') {
         std::sort(win.cursors.begin(), win.cursors.end());
+        std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+        if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+        IndentInfo info = get_indent_info_for_lang(lang);
+
         for (auto& c : win.cursors) {
             if (c.x > 0 && c.y < static_cast<int>(buf.lines.size())) {
-                buf.lines[c.y].erase(c.x - 1, 1);
-                c.x--;
+                std::string& line = buf.lines[c.y];
+                int del_len = 1;
+                if (!info.use_tabs && c.x >= info.tab_size) {
+                    bool all_spaces_before = true;
+                    for (int k = 0; k < c.x; ++k) {
+                        if (line[k] != ' ') {
+                            all_spaces_before = false;
+                            break;
+                        }
+                    }
+                    if (all_spaces_before && (c.x % info.tab_size == 0)) {
+                        del_len = info.tab_size;
+                    }
+                }
+                line.erase(c.x - del_len, del_len);
+                c.x -= del_len;
             }
         }
         buf.modified = true;
@@ -1631,6 +2122,30 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         }
 
         std::sort(win.cursors.begin(), win.cursors.end());
+
+        if (ins == "}" || ins == ")" || ins == "]") {
+            for (auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    std::string& line = buf.lines[c.y];
+                    bool only_spaces = true;
+                    for (int k = 0; k < c.x && k < static_cast<int>(line.size()); ++k) {
+                        if (line[k] != ' ' && line[k] != '\t') {
+                            only_spaces = false;
+                            break;
+                        }
+                    }
+                    std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+                    if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+                    IndentInfo info = get_indent_info_for_lang(lang);
+                    if (only_spaces && c.x >= static_cast<int>(info.unit.size())) {
+                        if (line.compare(c.x - info.unit.size(), info.unit.size(), info.unit) == 0) {
+                            line.erase(c.x - info.unit.size(), info.unit.size());
+                            c.x -= static_cast<int>(info.unit.size());
+                        }
+                    }
+                }
+            }
+        }
 
         std::map<int, std::vector<size_t>> line_cursor_map;
         for (size_t idx = 0; idx < win.cursors.size(); ++idx) {

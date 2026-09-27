@@ -42,3 +42,5 @@ private:
 
     std::vector<SyntaxStyle> fallback_highlight(const std::string& line) const;
 };
+
+std::string detect_lang(const std::string& path);

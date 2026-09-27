@@ -136,6 +136,8 @@ TsLib& get_ts() {
     return lib;
 }
 
+} // namespace
+
 std::string detect_lang(const std::string& path) {
     fs::path p(path);
     std::string ext = p.extension().string();
@@ -149,10 +151,19 @@ std::string detect_lang(const std::string& path) {
     if (ext == ".sh" || ext == ".bash") return "bash";
     if (ext == ".json") return "json";
     if (ext == ".toml") return "toml";
+    if (ext == ".yaml" || ext == ".yml") return "yaml";
+    if (ext == ".html" || ext == ".htm") return "html";
+    if (ext == ".css") return "css";
+    if (ext == ".js" || ext == ".jsx") return "javascript";
+    if (ext == ".ts" || ext == ".tsx") return "typescript";
+    if (ext == ".lua") return "lua";
+    if (ext == ".java") return "java";
     if (ext == ".diff" || ext == ".patch") return "diff";
     if (fn == "COMMIT_EDITMSG" || ext == ".gitcommit") return "gitcommit";
     return "";
 }
+
+namespace {
 
 std::string find_query_file(const std::string& lang) {
     const char* home = std::getenv("HOME");
