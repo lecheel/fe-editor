@@ -1364,44 +1364,72 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
 
         if (is_cursor_row) {
             if (hunk_diff_focus == "left") {
-                left_bg_r = in_left_marker ? 65 : 40;
-                left_bg_g = in_left_marker ? 45 : 60;
-                left_bg_b = in_left_marker ? 95 : 110;
-                right_bg_r = in_right_marker ? 45 : 26;
-                right_bg_g = in_right_marker ? 28 : 32;
-                right_bg_b = in_right_marker ? 65 : 46;
+                if (in_left_marker) {
+                    left_bg_r = 65; left_bg_g = 45; left_bg_b = 95;
+                } else if (is_hunk) {
+                    if (arow.left_idx >= 0) {
+                        left_bg_r = 30; left_bg_g = 56; left_bg_b = 38;
+                    } else {
+                        left_bg_r = 50; left_bg_g = 30; left_bg_b = 34;
+                    }
+                } else {
+                    left_bg_r = 40; left_bg_g = 60; left_bg_b = 110;
+                }
+
+                if (in_right_marker) {
+                    right_bg_r = 45; right_bg_g = 28; right_bg_b = 65;
+                } else if (is_hunk) {
+                    if (arow.right_idx >= 0) {
+                        right_bg_r = 38; right_bg_g = 24; right_bg_b = 26;
+                    } else {
+                        right_bg_r = 18; right_bg_g = 30; right_bg_b = 22;
+                    }
+                } else {
+                    right_bg_r = 26; right_bg_g = 32; right_bg_b = 46;
+                }
             } else {
-                left_bg_r = in_left_marker ? 45 : 26;
-                left_bg_g = in_left_marker ? 28 : 32;
-                left_bg_b = in_left_marker ? 65 : 46;
-                right_bg_r = in_right_marker ? 65 : 40;
-                right_bg_g = in_right_marker ? 45 : 60;
-                right_bg_b = in_right_marker ? 95 : 110;
+                if (in_left_marker) {
+                    left_bg_r = 45; left_bg_g = 28; left_bg_b = 65;
+                } else if (is_hunk) {
+                    if (arow.left_idx >= 0) {
+                        left_bg_r = 20; left_bg_g = 36; left_bg_b = 26;
+                    } else {
+                        left_bg_r = 30; left_bg_g = 20; left_bg_b = 22;
+                    }
+                } else {
+                    left_bg_r = 26; left_bg_g = 32; left_bg_b = 46;
+                }
+
+                if (in_right_marker) {
+                    right_bg_r = 65; right_bg_g = 45; right_bg_b = 95;
+                } else if (is_hunk) {
+                    if (arow.right_idx >= 0) {
+                        right_bg_r = 58; right_bg_g = 32; right_bg_b = 36;
+                    } else {
+                        right_bg_r = 26; right_bg_g = 46; right_bg_b = 32;
+                    }
+                } else {
+                    right_bg_r = 40; right_bg_g = 60; right_bg_b = 110;
+                }
             }
         } else {
             if (in_left_marker) {
                 left_bg_r = 45; left_bg_g = 28; left_bg_b = 65;
             } else if (is_hunk) {
-                const auto& hk = diff.hunks[arow.hunk_idx];
-                if (hk.kind == HunkType::ADDED) {
-                    left_bg_r = 20; left_bg_g = 32; left_bg_b = 26;
-                } else if (hk.kind == HunkType::DELETED) {
-                    left_bg_r = 38; left_bg_g = 24; left_bg_b = 26;
+                if (arow.left_idx >= 0) {
+                    left_bg_r = 20; left_bg_g = 36; left_bg_b = 26; // Dark green for working
                 } else {
-                    left_bg_r = 30; left_bg_g = 32; left_bg_b = 42;
+                    left_bg_r = 30; left_bg_g = 20; left_bg_b = 22;
                 }
             }
 
             if (in_right_marker) {
                 right_bg_r = 45; right_bg_g = 28; right_bg_b = 65;
             } else if (is_hunk) {
-                const auto& hk = diff.hunks[arow.hunk_idx];
-                if (hk.kind == HunkType::ADDED) {
-                    right_bg_r = 22; right_bg_g = 40; right_bg_b = 30;
-                } else if (hk.kind == HunkType::DELETED) {
-                    right_bg_r = 30; right_bg_g = 20; right_bg_b = 22;
+                if (arow.right_idx >= 0) {
+                    right_bg_r = 38; right_bg_g = 24; right_bg_b = 26; // Dark red for HEAD
                 } else {
-                    right_bg_r = 28; right_bg_g = 30; right_bg_b = 40;
+                    right_bg_r = 18; right_bg_g = 30; right_bg_b = 22;
                 }
             }
         }
@@ -1432,7 +1460,7 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
             } else if (is_cursor_row && hunk_diff_focus == "left") {
                 ncplane_set_fg_rgb8(stdplane, 100, 220, 255);
             } else if (is_hunk) {
-                ncplane_set_fg_rgb8(stdplane, 80, 190, 240);
+                ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
             } else {
                 ncplane_set_fg_rgb8(stdplane, 110, 115, 125);
             }
@@ -1532,7 +1560,7 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
             } else if (is_cursor_row && hunk_diff_focus == "right") {
                 ncplane_set_fg_rgb8(stdplane, 100, 220, 255);
             } else if (is_hunk) {
-                ncplane_set_fg_rgb8(stdplane, 80, 190, 240);
+                ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
             } else {
                 ncplane_set_fg_rgb8(stdplane, 110, 115, 125);
             }
