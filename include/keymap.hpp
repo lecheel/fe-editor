@@ -74,6 +74,59 @@ inline bool is_backspace(const ncinput& ni, uint32_t key) {
     return key == NCKEY_BACKSPACE || ni.id == NCKEY_BACKSPACE || key == 127 || key == '\b';
 }
 
+inline bool is_modifier_key(uint32_t key) {
+    switch (key) {
+#ifdef NCKEY_LSHIFT
+        case NCKEY_LSHIFT:
+#endif
+#ifdef NCKEY_RSHIFT
+        case NCKEY_RSHIFT:
+#endif
+#ifdef NCKEY_LCTRL
+        case NCKEY_LCTRL:
+#endif
+#ifdef NCKEY_RCTRL
+        case NCKEY_RCTRL:
+#endif
+#ifdef NCKEY_LALT
+        case NCKEY_LALT:
+#endif
+#ifdef NCKEY_RALT
+        case NCKEY_RALT:
+#endif
+#ifdef NCKEY_LSUPER
+        case NCKEY_LSUPER:
+#endif
+#ifdef NCKEY_RSUPER
+        case NCKEY_RSUPER:
+#endif
+#ifdef NCKEY_LHYPER
+        case NCKEY_LHYPER:
+#endif
+#ifdef NCKEY_RHYPER
+        case NCKEY_RHYPER:
+#endif
+#ifdef NCKEY_LMETA
+        case NCKEY_LMETA:
+#endif
+#ifdef NCKEY_RMETA
+        case NCKEY_RMETA:
+#endif
+#ifdef NCKEY_CAPS_LOCK
+        case NCKEY_CAPS_LOCK:
+#endif
+#ifdef NCKEY_NUM_LOCK
+        case NCKEY_NUM_LOCK:
+#endif
+#ifdef NCKEY_SCROLL_LOCK
+        case NCKEY_SCROLL_LOCK:
+#endif
+            return true;
+        default:
+            return false;
+    }
+}
+
 inline bool is_colon(const ncinput& ni, uint32_t key) {
     return key == ':' || ni.id == ':' || (ni.utf8[0] == ':' && ni.utf8[1] == '\0') ||
            (ni.shift && (key == ';' || ni.id == ';'));

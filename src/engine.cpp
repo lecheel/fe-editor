@@ -577,6 +577,9 @@ void VimEngine::run() {
         if (ni.evtype == NCTYPE_RELEASE) {
             continue;
         }
+        if (Keymap::is_modifier_key(key)) {
+            continue;
+        }
 
         LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
              key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
