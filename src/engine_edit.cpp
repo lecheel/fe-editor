@@ -26,6 +26,15 @@ REGISTER_COMMAND(
     }
 );
 
+REGISTER_COMMAND(
+    hunkdiff,
+    (std::vector<std::string>{"hunkdiff", "diff"}),
+    "Toggle F14 side-by-side hunk diff view against HEAD (F5)",
+    [](CommandContext& ctx) {
+        ctx.engine.open_hunk_diff();
+    }
+);
+
 namespace {
 
 enum class DotCommand {

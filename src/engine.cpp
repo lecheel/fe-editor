@@ -324,7 +324,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
                      std::to_string(w.cursors.front().y + 1) + ":" +
                      std::to_string(w.cursors.front().x + 1) + "]");
     } else {
-        set_info_msg("[F12] Help | [F2/F3] Hunks | [F4] Diff | [F9] Settings | [F11] Ripgrep | [Space] Leader");
+        set_info_msg("[F12] Help | [F5] Hunk Diff | [F4] Popup | [F2/F3] Hunks | [F9] Settings | [Space] Leader");
     }
 }
 
@@ -519,6 +519,26 @@ void VimEngine::run() {
                 show_whichkey_popup = false;
                 open_git_hunk_popup();
             }
+            continue;
+        }
+
+        if (key == NCKEY_F05 || ni.id == NCKEY_F05) {
+            if (show_hunk_diff) {
+                close_hunk_diff();
+            } else {
+                show_filepicker = false;
+                show_settings_popup = false;
+                show_git_hunk_popup = false;
+                show_whichkey_popup = false;
+                show_buffer_list = false;
+                show_rg_popup = false;
+                open_hunk_diff();
+            }
+            continue;
+        }
+
+        if (show_hunk_diff) {
+            handle_hunk_diff_input(ni, key);
             continue;
         }
 

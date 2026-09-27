@@ -46,6 +46,15 @@ private:
     bool show_git_hunk_popup{false};
     int active_hunk_idx{0};
 
+    // F14 full-screen side-by-side hunk diff state
+    bool show_hunk_diff{false};
+    std::string hunk_diff_focus{"left"}; // "left" (Working) or "right" (HEAD)
+    int hunk_diff_cursor_row{0};
+    int hunk_diff_scroll_y{0};
+    std::string hunk_diff_status_msg;
+    std::vector<std::string> hunk_diff_head_lines;
+    AlignedDiff hunk_diff_diff;
+
     bool leader_pending{false};
     bool show_whichkey_popup{false};
     std::chrono::steady_clock::time_point leader_start_time;
@@ -119,6 +128,11 @@ public:
     void revert_active_hunk();
     void handle_git_hunk_popup(const ncinput& ni, uint32_t key);
     void render_git_hunk_popup(unsigned int screen_h, unsigned int screen_w);
+
+    void open_hunk_diff();
+    void close_hunk_diff();
+    void handle_hunk_diff_input(const ncinput& ni, uint32_t key);
+    void render_hunk_diff(unsigned int screen_h, unsigned int screen_w);
 
     void open_filepicker();
     void scan_project_files();

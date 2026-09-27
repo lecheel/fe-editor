@@ -154,8 +154,8 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
         {"F1", "--"},
         {"F2", "Prev Hunk"},
         {"F3", "Next Hunk"},
-        {"F4", "Hunk Diff"},
-        {"F5", "--"},
+        {"F4", "Hunk Popup"},
+        {"F5", "Hunk Diff"},
         {"F6", "--"}
     };
 
@@ -551,6 +551,9 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
         case 'B':
             prev_buffer();
             break;
+        case 'd':
+            open_hunk_diff();
+            break;
         case 'h':
             open_git_hunk_popup();
             break;
@@ -597,7 +600,8 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
     };
 
     std::vector<WkItem> col2 = {
-        {"h", "Hunk Diff"},
+        {"d", "Hunk Diff (F5)"},
+        {"h", "Hunk Popup (F4)"},
         {"j", "Next Hunk"},
         {"k", "Prev Hunk"},
         {"l", "Gutter Settings"},

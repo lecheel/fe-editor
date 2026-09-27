@@ -25,6 +25,13 @@ void VimEngine::render() {
     unsigned int screen_h, screen_w;
     ncplane_dim_yx(stdplane, &screen_h, &screen_w);
 
+    if (show_hunk_diff) {
+        render_hunk_diff(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
+        notcurses_render(nc);
+        return;
+    }
+
     for (size_t wi = 0; wi < windows.size(); ++wi) {
         render_window(windows[wi], wi == active_win_idx);
     }
