@@ -125,6 +125,8 @@ void ConfigManager::load_json(const std::string& path) {
                             try { settings.whichkey_delay_ms = std::stoi(v); } catch (...) {}
                         } else if (k == "hunk_marker_style") {
                             try { g_hunk_marker_style = std::stoi(v); } catch (...) {}
+                        } else if (k == "scroll_offset" || k == "scrolloff" || k == "scroll_clamp_offset") {
+                            try { settings.scroll_offset = std::stoi(v); } catch (...) {}
                         }
                     }
                     j++;
@@ -189,7 +191,8 @@ void ConfigManager::save_json(const std::string& path) {
     out << "    \"whichkey_delay_ms\": " << settings.whichkey_delay_ms << ",\n";
     out << "    \"line_number_width\": " << settings.line_number_width << ",\n";
     out << "    \"highlight_current_line\": " << (settings.highlight_current_line ? "1" : "0") << ",\n";
-    out << "    \"hunk_marker_style\": " << g_hunk_marker_style << "\n";
+    out << "    \"hunk_marker_style\": " << g_hunk_marker_style << ",\n";
+    out << "    \"scroll_offset\": " << settings.scroll_offset << "\n";
     out << "  },\n";
     out << "  \"positions\": {\n";
     size_t idx = 0;

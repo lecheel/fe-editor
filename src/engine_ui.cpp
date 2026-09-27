@@ -1105,7 +1105,7 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    const int total_items = 5;
+    const int total_items = 6;
     if (key == NCKEY_UP || key == 'k' || key == 'K') {
         settings_selected_idx = (settings_selected_idx + total_items - 1) % total_items;
     } else if (key == NCKEY_DOWN || key == 'j' || key == 'J') {
@@ -1144,15 +1144,30 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
             case 4:
                 g_hunk_marker_style = (g_hunk_marker_style + 1) % 2;
                 break;
+            case 5: {
+                if (key == NCKEY_LEFT || key == 'h') {
+                    if (config.settings.scroll_offset <= 0) config.settings.scroll_offset = 10;
+                    else config.settings.scroll_offset--;
+                } else {
+                    if (config.settings.scroll_offset >= 10) config.settings.scroll_offset = 0;
+                    else config.settings.scroll_offset++;
+                }
+                break;
+            }
         }
         config.save();
+        for (auto& w : windows) {
+            if (w.buffer_idx < buffers.size()) {
+                update_window_scroll(w, *buffers[w.buffer_idx]);
+            }
+        }
     }
 }
 
 void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen_w) {
-    int popup_w = std::max(36, static_cast<int>(screen_w * 0.50));
+    int popup_w = std::max(38, static_cast<int>(screen_w * 0.50));
     popup_w = std::min(popup_w, static_cast<int>(screen_w) - 2);
-    int popup_h = 11;
+    int popup_h = 12;
     int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
     int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
 
@@ -1181,7 +1196,7 @@ void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen
     }
 
     // Header Title
-    std::string title = " Line Number Hunk Settings (F9) ";
+    std::string title = " Editor & Gutter Settings (F9) ";
     if (static_cast<int>(title.size()) < popup_w - 4) {
         ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
         ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
@@ -1199,13 +1214,16 @@ void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen
 
     std::string w_str = (config.settings.line_number_width == 0) ? "Auto" : std::to_string(config.settings.line_number_width);
     std::string hunk_style_str = (g_hunk_marker_style == 1) ? "< | >" : "< ~-= >";
+    std::string scrolloff_str = (config.settings.scroll_offset == 0) ? "< 0 (Off) >" :
+        ("< " + std::to_string(config.settings.scroll_offset) + (config.settings.scroll_offset == 1 ? " line >" : " lines >"));
 
     std::vector<Item> items = {
         {"Show Line Numbers", config.settings.show_line_numbers ? "[ ON ]" : "[ OFF ]"},
         {"Line Number Style", "< " + mode_str + " >"},
         {"Hunk/Gutter Width", "< " + w_str + " >"},
         {"Highlight Active", config.settings.highlight_current_line ? "[ ON ]" : "[ OFF ]"},
-        {"Hunk Gutter Style", hunk_style_str}
+        {"Hunk Gutter Style", hunk_style_str},
+        {"Scroll Clamp Offset", scrolloff_str}
     };
 
     for (size_t i = 0; i < items.size(); ++i) {

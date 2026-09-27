@@ -11,12 +11,16 @@ void VimEngine::update_window_scroll(Window& win, const TextBuffer& buf) {
     if (win.cursors.empty()) return;
     Cursor primary = win.cursors.front();
 
-    if (primary.y < win.scroll_y) {
-        win.scroll_y = primary.y;
+    int scrolloff = std::max(0, config.settings.scroll_offset);
+    int effective_scrolloff = std::min(scrolloff, win.h > 1 ? (win.h - 1) / 2 : 0);
+
+    if (primary.y < win.scroll_y + effective_scrolloff) {
+        win.scroll_y = primary.y - effective_scrolloff;
     }
-    if (primary.y >= win.scroll_y + win.h) {
-        win.scroll_y = primary.y - win.h + 1;
+    if (primary.y >= win.scroll_y + win.h - effective_scrolloff) {
+        win.scroll_y = primary.y - win.h + effective_scrolloff + 1;
     }
+    win.scroll_y = std::max(0, win.scroll_y);
 }
 
 void VimEngine::render() {

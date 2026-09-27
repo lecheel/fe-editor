@@ -14,6 +14,7 @@ struct EditorSettings {
     int line_number_width{4}; // 0 = Auto, 3..8 = fixed width
     bool highlight_current_line{true};
     int whichkey_delay_ms{300};
+    int scroll_offset{3}; // Scroll clamp offset (scrolloff margin lines: 0..10)
 };
 
 struct FilePosition {
