@@ -397,15 +397,101 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
 }
 
 void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
-    if (screen_h < 4 || screen_w < 20) return;
+    if (screen_h < 6 || screen_w < 30) return;
 
-    int left_w = (static_cast<int>(screen_w) - 1) / 2;
-    int divider_x = left_w;
+    int popup_x = 0;
+    int popup_y = 0;
+    int popup_w = static_cast<int>(screen_w);
+    int popup_h = std::max(6, static_cast<int>(screen_h) - 2);
+
+    int header_sep_y = popup_y + 2;
+    int list_start_y = header_sep_y + 1;
+    int visible_rows = popup_h - (list_start_y - popup_y) - 1;
+
+    // Background fill (following F11 vg popup style)
+    ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    // Border (roundbox) in F11 soft cyan/blue
+    ncplane_set_fg_rgb8(stdplane, 100, 180, 255);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, header_sep_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+    ncplane_putstr_yx(stdplane, header_sep_y, popup_x, "├");
+    ncplane_putstr_yx(stdplane, header_sep_y, popup_x + popup_w - 1, "┤");
+
+    // Title on top border (following F11 vg title style)
+    std::string title = " Hunk Diff View (F5 / :diff) ";
+    ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    // Header info (row popup_y + 1)
+    auto& buf = active_buf();
+    std::string disp_file = !buf.name.empty() ? buf.name : "buffer";
+    ncplane_set_fg_rgb8(stdplane, 240, 200, 80);
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "📄 File:    ");
+    ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, disp_file.c_str());
+
+    const auto& diff = hunk_diff_diff;
+    int total_rows = static_cast<int>(diff.rows.size());
+
+    int current_hunk_id = 0;
+    if (hunk_diff_cursor_row >= 0 && hunk_diff_cursor_row < total_rows) {
+        int h_idx = diff.rows[hunk_diff_cursor_row].hunk_idx;
+        if (h_idx >= 0 && h_idx < static_cast<int>(diff.hunks.size())) {
+            current_hunk_id = diff.hunks[h_idx].id + 1;
+        }
+    }
+
+    std::string focus_str = (hunk_diff_focus == "left") ? "Working" : "HEAD";
+    char stats_buf[160];
+    if (!hunk_diff_status_msg.empty()) {
+        snprintf(stats_buf, sizeof(stats_buf), "[hunk %d/%zu | Focus: %s | %s]",
+                 current_hunk_id, diff.hunks.size(), focus_str.c_str(), hunk_diff_status_msg.c_str());
+    } else {
+        snprintf(stats_buf, sizeof(stats_buf), "[hunk %d/%zu | Focus: %s (Tab: switch)]",
+                 current_hunk_id, diff.hunks.size(), focus_str.c_str());
+    }
+
+    int stats_x = popup_x + popup_w - static_cast<int>(std::string(stats_buf).size()) - 3;
+    if (stats_x > popup_x + 16 + static_cast<int>(disp_file.size())) {
+        ncplane_set_fg_rgb8(stdplane, 140, 150, 175);
+        ncplane_putstr_yx(stdplane, popup_y + 1, stats_x, stats_buf);
+    }
+
+    // Panel layout inside rounded border:
+    // Left border: column popup_x
+    // Left panel: from popup_x + 1, width left_w
+    // Center divider: column divider_x
+    // Right panel: from right_x, width right_w
+    // Right border: column popup_x + popup_w - 1
+    int inner_w = popup_w - 2;
+    int left_w = (inner_w - 1) / 2;
+    int divider_x = popup_x + 1 + left_w;
     int right_x = divider_x + 1;
-    int right_w = static_cast<int>(screen_w) - right_x;
+    int right_w = (popup_x + popup_w - 1) - right_x;
 
-    int visible_rows = std::max(1, static_cast<int>(screen_h) - 2);
+    // Divider intersection glyphs at header separator and footer border
+    ncplane_set_fg_rgb8(stdplane, 100, 180, 255);
+    ncplane_putstr_yx(stdplane, header_sep_y, divider_x, "┬");
 
+    // Viewport scrolling
     if (hunk_diff_cursor_row < hunk_diff_scroll_y) {
         hunk_diff_scroll_y = hunk_diff_cursor_row;
     }
@@ -414,18 +500,16 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
     }
     hunk_diff_scroll_y = std::max(0, hunk_diff_scroll_y);
 
-    const auto& diff = hunk_diff_diff;
-    int total_rows = static_cast<int>(diff.rows.size());
-
+    // Draw content rows
     for (int r = 0; r < visible_rows; ++r) {
         int row_idx = hunk_diff_scroll_y + r;
-        int draw_y = r;
+        int draw_y = list_start_y + r;
 
         if (row_idx >= total_rows) {
-            ncplane_set_bg_rgb8(stdplane, 18, 20, 24);
-            for (int c = 0; c < static_cast<int>(screen_w); ++c) {
+            ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+            for (int c = popup_x + 1; c < popup_x + popup_w - 1; ++c) {
                 if (c == divider_x) {
-                    ncplane_set_fg_rgb8(stdplane, 65, 70, 80);
+                    ncplane_set_fg_rgb8(stdplane, 65, 75, 95);
                     ncplane_putstr_yx(stdplane, draw_y, c, "│");
                 } else {
                     ncplane_putchar_yx(stdplane, draw_y, c, ' ');
@@ -438,16 +522,16 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
         bool is_cursor_row = (row_idx == hunk_diff_cursor_row);
         bool is_hunk = (arow.hunk_idx != -1);
 
-        uint8_t left_bg_r = 18, left_bg_g = 20, left_bg_b = 24;
-        uint8_t right_bg_r = 18, right_bg_g = 20, right_bg_b = 24;
+        uint8_t left_bg_r = 18, left_bg_g = 20, left_bg_b = 26;
+        uint8_t right_bg_r = 18, right_bg_g = 20, right_bg_b = 26;
 
         if (is_cursor_row) {
             if (hunk_diff_focus == "left") {
-                left_bg_r = 40; left_bg_g = 52; left_bg_b = 78;
-                right_bg_r = 28; right_bg_g = 32; right_bg_b = 44;
+                left_bg_r = 40; left_bg_g = 60; left_bg_b = 110;
+                right_bg_r = 26; right_bg_g = 32; right_bg_b = 46;
             } else {
-                left_bg_r = 28; left_bg_g = 32; left_bg_b = 44;
-                right_bg_r = 40; right_bg_g = 52; right_bg_b = 78;
+                left_bg_r = 26; left_bg_g = 32; left_bg_b = 46;
+                right_bg_r = 40; right_bg_g = 60; right_bg_b = 110;
             }
         } else if (is_hunk) {
             const auto& hk = diff.hunks[arow.hunk_idx];
@@ -458,52 +542,61 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
                 left_bg_r = 38; left_bg_g = 24; left_bg_b = 26;
                 right_bg_r = 30; right_bg_g = 20; right_bg_b = 22;
             } else {
-                left_bg_r = 32; left_bg_g = 32; left_bg_b = 44;
-                right_bg_r = 30; right_bg_g = 30; right_bg_b = 42;
+                left_bg_r = 30; left_bg_g = 32; left_bg_b = 42;
+                right_bg_r = 28; right_bg_g = 30; right_bg_b = 40;
             }
         }
 
         // Fill left panel
         ncplane_set_bg_rgb8(stdplane, left_bg_r, left_bg_g, left_bg_b);
-        for (int c = 0; c < left_w; ++c) {
+        for (int c = popup_x + 1; c < divider_x; ++c) {
             ncplane_putchar_yx(stdplane, draw_y, c, ' ');
         }
 
-        // Draw left line number
+        // Left pointer & line number
+        int l_start_x = popup_x + 1;
+        if (is_cursor_row && hunk_diff_focus == "left") {
+            ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+            ncplane_putstr_yx(stdplane, draw_y, l_start_x, "▶");
+        } else {
+            ncplane_putstr_yx(stdplane, draw_y, l_start_x, " ");
+        }
+
         char l_num[16];
         if (arow.left_idx >= 0) {
             snprintf(l_num, sizeof(l_num), "%4d ", arow.left_idx + 1);
             if (is_cursor_row && hunk_diff_focus == "left") {
-                ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+                ncplane_set_fg_rgb8(stdplane, 100, 220, 255);
             } else if (is_hunk) {
-                ncplane_set_fg_rgb8(stdplane, 100, 200, 255);
+                ncplane_set_fg_rgb8(stdplane, 80, 190, 240);
             } else {
                 ncplane_set_fg_rgb8(stdplane, 110, 115, 125);
             }
-            ncplane_putstr_yx(stdplane, draw_y, 0, l_num);
+            ncplane_putstr_yx(stdplane, draw_y, l_start_x + 1, l_num);
         } else {
-            ncplane_putstr_yx(stdplane, draw_y, 0, "     ");
+            ncplane_putstr_yx(stdplane, draw_y, l_start_x + 1, "     ");
         }
 
-        // Draw left content
-        int left_text_max_w = left_w - 5;
+        // Left text content
+        int left_text_x = l_start_x + 6;
+        int left_text_max_w = divider_x - left_text_x;
         if (left_text_max_w > 0) {
             if (arow.left_idx < 0) {
                 ncplane_set_fg_rgb8(stdplane, 85, 120, 175);
-                ncplane_putstr_yx(stdplane, draw_y, 5, "~");
+                ncplane_putstr_yx(stdplane, draw_y, left_text_x, "~");
             } else {
                 const std::string& line = diff.left_lines[arow.left_idx];
                 std::string disp = line;
                 if (static_cast<int>(disp.size()) > left_text_max_w) {
                     disp = disp.substr(0, left_text_max_w);
                 }
-                ncplane_set_fg_rgb8(stdplane, is_cursor_row ? 255 : 220, is_cursor_row ? 255 : 225, is_cursor_row ? 255 : 230);
-                ncplane_putstr_yx(stdplane, draw_y, 5, disp.c_str());
+                ncplane_set_fg_rgb8(stdplane, is_cursor_row ? 255 : 215, is_cursor_row ? 255 : 220, is_cursor_row ? 255 : 230);
+                ncplane_putstr_yx(stdplane, draw_y, left_text_x, disp.c_str());
             }
         }
 
-        // Draw divider glyph
-        ncplane_set_bg_rgb8(stdplane, 18, 20, 24);
+        // Center divider column
+        ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
         if (is_cursor_row) {
             ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
             if (hunk_diff_focus == "left") {
@@ -512,95 +605,66 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
                 ncplane_putstr_yx(stdplane, draw_y, divider_x, "▐");
             }
         } else if (is_hunk) {
-            ncplane_set_fg_rgb8(stdplane, 130, 200, 255);
+            ncplane_set_fg_rgb8(stdplane, 100, 180, 255);
             ncplane_putstr_yx(stdplane, draw_y, divider_x, "◆");
         } else {
-            ncplane_set_fg_rgb8(stdplane, 65, 70, 80);
+            ncplane_set_fg_rgb8(stdplane, 65, 75, 95);
             ncplane_putstr_yx(stdplane, draw_y, divider_x, "│");
         }
 
         // Fill right panel
         ncplane_set_bg_rgb8(stdplane, right_bg_r, right_bg_g, right_bg_b);
-        for (int c = right_x; c < static_cast<int>(screen_w); ++c) {
+        for (int c = right_x; c < popup_x + popup_w - 1; ++c) {
             ncplane_putchar_yx(stdplane, draw_y, c, ' ');
         }
 
-        // Draw right line number
+        // Right pointer & line number
+        if (is_cursor_row && hunk_diff_focus == "right") {
+            ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+            ncplane_putstr_yx(stdplane, draw_y, right_x, "▶");
+        } else {
+            ncplane_putstr_yx(stdplane, draw_y, right_x, " ");
+        }
+
         char r_num[16];
         if (arow.right_idx >= 0) {
             snprintf(r_num, sizeof(r_num), "%4d ", arow.right_idx + 1);
             if (is_cursor_row && hunk_diff_focus == "right") {
-                ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+                ncplane_set_fg_rgb8(stdplane, 100, 220, 255);
             } else if (is_hunk) {
-                ncplane_set_fg_rgb8(stdplane, 100, 200, 255);
+                ncplane_set_fg_rgb8(stdplane, 80, 190, 240);
             } else {
                 ncplane_set_fg_rgb8(stdplane, 110, 115, 125);
             }
-            ncplane_putstr_yx(stdplane, draw_y, right_x, r_num);
+            ncplane_putstr_yx(stdplane, draw_y, right_x + 1, r_num);
         } else {
-            ncplane_putstr_yx(stdplane, draw_y, right_x, "     ");
+            ncplane_putstr_yx(stdplane, draw_y, right_x + 1, "     ");
         }
 
-        // Draw right content
-        int right_text_max_w = right_w - 5;
+        // Right text content
+        int right_text_x = right_x + 6;
+        int right_text_max_w = (popup_x + popup_w - 1) - right_text_x;
         if (right_text_max_w > 0) {
             if (arow.right_idx < 0) {
                 ncplane_set_fg_rgb8(stdplane, 85, 120, 175);
-                ncplane_putstr_yx(stdplane, draw_y, right_x + 5, "~");
+                ncplane_putstr_yx(stdplane, draw_y, right_text_x, "~");
             } else {
                 const std::string& line = diff.right_lines[arow.right_idx];
                 std::string disp = line;
                 if (static_cast<int>(disp.size()) > right_text_max_w) {
                     disp = disp.substr(0, right_text_max_w);
                 }
-                ncplane_set_fg_rgb8(stdplane, is_cursor_row ? 255 : 220, is_cursor_row ? 255 : 225, is_cursor_row ? 255 : 230);
-                ncplane_putstr_yx(stdplane, draw_y, right_x + 5, disp.c_str());
+                ncplane_set_fg_rgb8(stdplane, is_cursor_row ? 255 : 215, is_cursor_row ? 255 : 220, is_cursor_row ? 255 : 230);
+                ncplane_putstr_yx(stdplane, draw_y, right_text_x, disp.c_str());
             }
         }
     }
 
-    // Status row (second from bottom, row screen_h - 2) in reverse video
-    int status_y = static_cast<int>(screen_h) - 2;
-    ncplane_set_bg_rgb8(stdplane, 225, 230, 240);
-    ncplane_set_fg_rgb8(stdplane, 20, 22, 28);
-    for (unsigned int c = 0; c < screen_w; ++c) {
-        ncplane_putchar_yx(stdplane, status_y, c, ' ');
-    }
-
-    int current_hunk_id = 0;
-    if (hunk_diff_cursor_row >= 0 && hunk_diff_cursor_row < total_rows) {
-        int h_idx = diff.rows[hunk_diff_cursor_row].hunk_idx;
-        if (h_idx >= 0 && h_idx < static_cast<int>(diff.hunks.size())) {
-            current_hunk_id = diff.hunks[h_idx].id + 1;
-        }
-    }
-
-    std::string focus_label = (hunk_diff_focus == "left") ? "Working" : "HEAD";
-    std::string status_text = " " + std::to_string(current_hunk_id) + "/" +
-                              std::to_string(diff.hunks.size()) +
-                              "  Focus: " + focus_label;
-    if (!hunk_diff_status_msg.empty()) {
-        status_text += "  |  " + hunk_diff_status_msg;
-    }
-    if (static_cast<int>(status_text.size()) >= static_cast<int>(screen_w)) {
-        status_text = status_text.substr(0, screen_w - 1);
-    }
-    ncplane_on_styles(stdplane, NCSTYLE_BOLD);
-    ncplane_putstr_yx(stdplane, status_y, 0, status_text.c_str());
-    ncplane_off_styles(stdplane, NCSTYLE_BOLD);
-
-    // Legend row (bottom, row screen_h - 1)
-    int legend_y = static_cast<int>(screen_h) - 1;
-    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
-    ncplane_set_fg_rgb8(stdplane, 175, 185, 205);
-    for (unsigned int c = 0; c < screen_w; ++c) {
-        ncplane_putchar_yx(stdplane, legend_y, c, ' ');
-    }
-    std::string legend_text = " [Tab] Switch  [l/L] Hunk  [a] Apply  [u] Undo  [d] Delete  [y] Yank  [p] Paste  [w] Write  [q] Quit ";
-    if (static_cast<int>(legend_text.size()) >= static_cast<int>(screen_w)) {
-        legend_text = legend_text.substr(0, screen_w - 1);
-    }
-    ncplane_putstr_yx(stdplane, legend_y, 0, legend_text.c_str());
+    // Footer actions on bottom border (following F11 vg footer style)
+    std::string footer = " [Tab] Switch  [l/L] Hunk  [a] Apply  [u] Undo  [d] Delete  [y] Yank  [p] Paste  [w] Write  [q/Esc] Close ";
+    ncplane_set_fg_rgb8(stdplane, 255, 215, 80);
+    ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
 }
 
 void VimEngine::open_filepicker() {
