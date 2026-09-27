@@ -1159,11 +1159,22 @@ void VimEngine::render_info_bar(int y, unsigned int screen_w) {
         ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
 
         if (!info_msg.empty()) {
-            std::string bar = " " + info_msg;
-            if (static_cast<int>(bar.size()) >= static_cast<int>(screen_w)) {
-                bar = bar.substr(0, screen_w - 1);
+            bool is_pending_op = (info_msg == "d" || info_msg == "dg" || info_msg == "y" ||
+                                  info_msg == "g" || info_msg == "=" || info_msg == ">" ||
+                                  info_msg == "<");
+            if (is_pending_op) {
+                int text_len = static_cast<int>(info_msg.size());
+                int rx = static_cast<int>(screen_w) - text_len - 1;
+                if (rx >= 0) {
+                    ncplane_putstr_yx(stdplane, y, rx, info_msg.c_str());
+                }
+            } else {
+                std::string bar = " " + info_msg;
+                if (static_cast<int>(bar.size()) >= static_cast<int>(screen_w)) {
+                    bar = bar.substr(0, screen_w - 1);
+                }
+                ncplane_putstr_yx(stdplane, y, 0, bar.c_str());
             }
-            ncplane_putstr_yx(stdplane, y, 0, bar.c_str());
         }
     }
 }
