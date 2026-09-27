@@ -54,6 +54,7 @@ private:
     std::string hunk_diff_status_msg;
     std::vector<std::string> hunk_diff_head_lines;
     AlignedDiff hunk_diff_diff;
+    std::shared_ptr<SyntaxHighlighter> hunk_diff_head_syntax;
 
     bool leader_pending{false};
     bool show_whichkey_popup{false};

@@ -173,6 +173,10 @@ void VimEngine::open_hunk_diff() {
     }
 
     hunk_diff_head_lines = buf.git_base_lines;
+    hunk_diff_head_syntax = std::make_shared<SyntaxHighlighter>();
+    hunk_diff_head_syntax->init_for_file(!buf.file_path.empty() ? buf.file_path : buf.name);
+    hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+
     hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
     hunk_diff_focus = "left";
     hunk_diff_status_msg.clear();
@@ -577,7 +581,36 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
             ncplane_putstr_yx(stdplane, draw_y, l_start_x + 1, "     ");
         }
 
-        // Left text content
+        auto draw_syntax_line = [&](int start_x, int max_w, const std::string& text, const std::vector<SyntaxStyle>& styles) {
+            int len = std::min(static_cast<int>(text.size()), max_w);
+            if (len <= 0) return;
+            int idx = 0;
+            while (idx < len) {
+                uint8_t cur_r = 220, cur_g = 220, cur_b = 220;
+                if (idx < static_cast<int>(styles.size())) {
+                    cur_r = styles[idx].r;
+                    cur_g = styles[idx].g;
+                    cur_b = styles[idx].b;
+                }
+                int next_idx = idx + 1;
+                while (next_idx < len) {
+                    uint8_t nr = 220, ng = 220, nb = 220;
+                    if (next_idx < static_cast<int>(styles.size())) {
+                        nr = styles[next_idx].r;
+                        ng = styles[next_idx].g;
+                        nb = styles[next_idx].b;
+                    }
+                    if (nr != cur_r || ng != cur_g || nb != cur_b) break;
+                    next_idx++;
+                }
+                ncplane_set_fg_rgb8(stdplane, cur_r, cur_g, cur_b);
+                std::string chunk = text.substr(idx, next_idx - idx);
+                ncplane_putstr_yx(stdplane, draw_y, start_x + idx, chunk.c_str());
+                idx = next_idx;
+            }
+        };
+
+        // Left text content with syntax coloring
         int left_text_x = l_start_x + 6;
         int left_text_max_w = divider_x - left_text_x;
         if (left_text_max_w > 0) {
@@ -586,12 +619,11 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
                 ncplane_putstr_yx(stdplane, draw_y, left_text_x, "~");
             } else {
                 const std::string& line = diff.left_lines[arow.left_idx];
-                std::string disp = line;
-                if (static_cast<int>(disp.size()) > left_text_max_w) {
-                    disp = disp.substr(0, left_text_max_w);
+                std::vector<SyntaxStyle> l_styles;
+                if (buf.syntax) {
+                    l_styles = buf.syntax->get_line_styles(arow.left_idx, line);
                 }
-                ncplane_set_fg_rgb8(stdplane, is_cursor_row ? 255 : 215, is_cursor_row ? 255 : 220, is_cursor_row ? 255 : 230);
-                ncplane_putstr_yx(stdplane, draw_y, left_text_x, disp.c_str());
+                draw_syntax_line(left_text_x, left_text_max_w, line, l_styles);
             }
         }
 
@@ -641,7 +673,7 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
             ncplane_putstr_yx(stdplane, draw_y, right_x + 1, "     ");
         }
 
-        // Right text content
+        // Right text content with syntax coloring
         int right_text_x = right_x + 6;
         int right_text_max_w = (popup_x + popup_w - 1) - right_text_x;
         if (right_text_max_w > 0) {
@@ -650,12 +682,13 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
                 ncplane_putstr_yx(stdplane, draw_y, right_text_x, "~");
             } else {
                 const std::string& line = diff.right_lines[arow.right_idx];
-                std::string disp = line;
-                if (static_cast<int>(disp.size()) > right_text_max_w) {
-                    disp = disp.substr(0, right_text_max_w);
+                std::vector<SyntaxStyle> r_styles;
+                if (hunk_diff_head_syntax) {
+                    r_styles = hunk_diff_head_syntax->get_line_styles(arow.right_idx, line);
+                } else if (buf.syntax) {
+                    r_styles = buf.syntax->get_line_styles(-1, line);
                 }
-                ncplane_set_fg_rgb8(stdplane, is_cursor_row ? 255 : 215, is_cursor_row ? 255 : 220, is_cursor_row ? 255 : 230);
-                ncplane_putstr_yx(stdplane, draw_y, right_text_x, disp.c_str());
+                draw_syntax_line(right_text_x, right_text_max_w, line, r_styles);
             }
         }
     }
