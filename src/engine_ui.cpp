@@ -1315,7 +1315,7 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
         }
 
         std::string branch_name = !buf.git_branch.empty() ? buf.git_branch : "git";
-        std::string git_seg = "  " + branch_name + " +" + std::to_string(add_cnt) +
+        std::string git_seg = "  " + branch_name + " +" + std::to_string(add_cnt) +
                               " ~" + std::to_string(mod_cnt) + " -" + std::to_string(del_cnt) + " ";
 
         ncplane_set_fg_rgb8(stdplane, 225, 230, 240);
