@@ -181,6 +181,13 @@ void VimEngine::open_hunk_diff() {
     hunk_diff_focus = "left";
     hunk_diff_status_msg.clear();
 
+    manual_left_active = false;
+    manual_left_start = -1;
+    manual_left_end = -1;
+    manual_right_active = false;
+    manual_right_start = -1;
+    manual_right_end = -1;
+
     auto& win = active_win();
     int cur_y = win.cursors.empty() ? 0 : win.cursors.front().y;
     hunk_diff_cursor_row = 0;
@@ -215,8 +222,59 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     const auto& diff = hunk_diff_diff;
 
-    if (key == 'q' || key == 'Q' || key == NCKEY_ESC) {
+    if (key == NCKEY_ESC) {
+        if (manual_left_active || manual_right_active) {
+            manual_left_active = false;
+            manual_right_active = false;
+            manual_left_start = -1;
+            manual_left_end = -1;
+            manual_right_start = -1;
+            manual_right_end = -1;
+            hunk_diff_status_msg = "Manual markers cleared";
+            return;
+        }
         close_hunk_diff();
+        return;
+    }
+
+    if (key == 'q' || key == 'Q') {
+        close_hunk_diff();
+        return;
+    }
+
+    // Set manual marker start (m)
+    if (key == 'm') {
+        if (hunk_diff_focus == "left") {
+            manual_left_start = hunk_diff_cursor_row;
+            manual_left_end = hunk_diff_cursor_row;
+            manual_left_active = true;
+            hunk_diff_status_msg = "Left marker start: row " + std::to_string(hunk_diff_cursor_row + 1) + " (move & press M for end)";
+        } else {
+            manual_right_start = hunk_diff_cursor_row;
+            manual_right_end = hunk_diff_cursor_row;
+            manual_right_active = true;
+            hunk_diff_status_msg = "Right marker start: row " + std::to_string(hunk_diff_cursor_row + 1) + " (move & press M for end)";
+        }
+        return;
+    }
+
+    // Set manual marker end (M)
+    if (key == 'M' || (ni.shift && (key == 'm' || ni.id == 'm' || ni.id == 'M'))) {
+        if (hunk_diff_focus == "left") {
+            if (manual_left_start < 0) manual_left_start = hunk_diff_cursor_row;
+            manual_left_end = hunk_diff_cursor_row;
+            manual_left_active = true;
+            int r1 = std::min(manual_left_start, manual_left_end) + 1;
+            int r2 = std::max(manual_left_start, manual_left_end) + 1;
+            hunk_diff_status_msg = "Left marker set: rows " + std::to_string(r1) + ".." + std::to_string(r2) + " (press 'a' to merge)";
+        } else {
+            if (manual_right_start < 0) manual_right_start = hunk_diff_cursor_row;
+            manual_right_end = hunk_diff_cursor_row;
+            manual_right_active = true;
+            int r1 = std::min(manual_right_start, manual_right_end) + 1;
+            int r2 = std::max(manual_right_start, manual_right_end) + 1;
+            hunk_diff_status_msg = "Right marker set: rows " + std::to_string(r1) + ".." + std::to_string(r2) + " (press 'a' to merge)";
+        }
         return;
     }
 
@@ -291,6 +349,10 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
     }
 
     if (key == 'p') {
+        if (hunk_diff_focus == "right") {
+            hunk_diff_status_msg = "Cannot paste into HEAD: HEAD is read-only";
+            return;
+        }
         if (yank_reg.lines.empty() || !yank_reg.is_linewise) {
             hunk_diff_status_msg = "Clipboard empty or not line content";
             return;
@@ -323,7 +385,7 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
 
     if (key == 'd') {
         if (hunk_diff_focus == "right") {
-            hunk_diff_status_msg = "Cannot delete from HEAD panel";
+            hunk_diff_status_msg = "Cannot delete from HEAD: HEAD is read-only";
             return;
         }
         if (hunk_diff_cursor_row < 0 || hunk_diff_cursor_row >= static_cast<int>(diff.rows.size())) return;
@@ -351,12 +413,104 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
 
     if (key == 'a' || key == 'A') {
         if (hunk_diff_cursor_row < 0 || hunk_diff_cursor_row >= static_cast<int>(diff.rows.size())) return;
+
+        // 'a' = push to other side, 'A' = pull from other side
+        bool is_push = (key == 'a');
+        bool left_to_right = (hunk_diff_focus == "left" && is_push) ||
+                             (hunk_diff_focus == "right" && !is_push);
+
+        // HEAD is readonly: any operation attempting to modify HEAD is ignored with a warning message
+        if (left_to_right) {
+            hunk_diff_status_msg = "Cannot modify HEAD: HEAD is read-only";
+            return;
+        }
+
+        bool in_left_marker = manual_left_active &&
+            (hunk_diff_cursor_row >= std::min(manual_left_start, manual_left_end) &&
+             hunk_diff_cursor_row <= std::max(manual_left_start, manual_left_end));
+
+        bool in_right_marker = manual_right_active &&
+            (hunk_diff_cursor_row >= std::min(manual_right_start, manual_right_end) &&
+             hunk_diff_cursor_row <= std::max(manual_right_start, manual_right_end));
+
+        // Cursor must be inside the marker on the focused side
+        bool in_marker = (hunk_diff_focus == "left" && in_left_marker) ||
+                         (hunk_diff_focus == "right" && in_right_marker);
+
+        // Manual block merge (HEAD -> Working)
+        if (in_marker) {
+            int l_r1 = manual_left_active ? std::min(manual_left_start, manual_left_end)
+                                          : std::min(manual_right_start, manual_right_end);
+            int l_r2 = manual_left_active ? std::max(manual_left_start, manual_left_end)
+                                          : std::max(manual_right_start, manual_right_end);
+
+            int r_r1 = manual_right_active ? std::min(manual_right_start, manual_right_end)
+                                           : std::min(manual_left_start, manual_left_end);
+            int r_r2 = manual_right_active ? std::max(manual_right_start, manual_right_end)
+                                           : std::max(manual_left_start, manual_left_end);
+
+            int left_line_start = -1;
+            int left_line_end = -1;
+            for (int r = l_r1; r <= l_r2 && r < static_cast<int>(diff.rows.size()); ++r) {
+                int idx = diff.rows[r].left_idx;
+                if (idx >= 0) {
+                    if (left_line_start == -1 || idx < left_line_start) left_line_start = idx;
+                    if (left_line_end == -1 || idx > left_line_end) left_line_end = idx;
+                }
+            }
+            if (left_line_start == -1) {
+                for (int r = l_r1 - 1; r >= 0; --r) {
+                    if (diff.rows[r].left_idx >= 0) {
+                        left_line_start = diff.rows[r].left_idx + 1;
+                        left_line_end = left_line_start - 1;
+                        break;
+                    }
+                }
+                if (left_line_start == -1) {
+                    left_line_start = 0;
+                    left_line_end = -1;
+                }
+            }
+
+            std::vector<std::string> right_lines_to_merge;
+            for (int r = r_r1; r <= r_r2 && r < static_cast<int>(diff.rows.size()); ++r) {
+                int idx = diff.rows[r].right_idx;
+                if (idx >= 0 && idx < static_cast<int>(diff.right_lines.size())) {
+                    right_lines_to_merge.push_back(diff.right_lines[idx]);
+                }
+            }
+
+            buf.push_undo(win.cursors);
+            int erase_cnt = (left_line_end >= left_line_start) ? (left_line_end - left_line_start + 1) : 0;
+            if (left_line_start < static_cast<int>(buf.lines.size()) && erase_cnt > 0) {
+                int actual_erase = std::min(erase_cnt, static_cast<int>(buf.lines.size()) - left_line_start);
+                buf.lines.erase(buf.lines.begin() + left_line_start, buf.lines.begin() + left_line_start + actual_erase);
+            }
+            if (!right_lines_to_merge.empty()) {
+                int ins_pos = std::clamp(left_line_start, 0, static_cast<int>(buf.lines.size()));
+                buf.lines.insert(buf.lines.begin() + ins_pos, right_lines_to_merge.begin(), right_lines_to_merge.end());
+            }
+            if (buf.lines.empty()) buf.lines.push_back("");
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+            manual_left_active = false;
+            manual_right_active = false;
+            hunk_diff_status_msg = "Manual merge: Replaced with " + std::to_string(right_lines_to_merge.size()) + " lines from HEAD";
+            hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
+            return;
+        }
+
+        // Standard hunk apply if not in manual marker (HEAD -> Working)
         const auto& row = diff.rows[hunk_diff_cursor_row];
         if (row.hunk_idx == -1 || row.hunk_idx >= static_cast<int>(diff.hunks.size())) {
             hunk_diff_status_msg = "No hunk at cursor to apply";
             return;
         }
         const auto& hunk = diff.hunks[row.hunk_idx];
+
         buf.push_undo(win.cursors);
         int l_start = hunk.left_start;
         int l_count = hunk.left_count;
@@ -374,8 +528,8 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
         buf.invalidate_hunks();
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         hunk_diff_diff = compute_aligned_diff(buf.lines, hunk_diff_head_lines);
+        hunk_diff_status_msg = "Applied hunk #" + std::to_string(hunk.id + 1) + " from HEAD to working";
         hunk_diff_cursor_row = std::clamp(hunk_diff_cursor_row, 0, std::max(0, static_cast<int>(hunk_diff_diff.rows.size()) - 1));
-        hunk_diff_status_msg = "Applied hunk #" + std::to_string(hunk.id + 1) + " from HEAD";
         return;
     }
 
@@ -463,14 +617,28 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
         }
     }
 
-    std::string focus_str = (hunk_diff_focus == "left") ? "Working" : "HEAD";
-    char stats_buf[160];
+    std::string focus_str = (hunk_diff_focus == "left") ? "Working" : "HEAD (read-only)";
+    char stats_buf[200];
+    std::string marker_info;
+    if (manual_left_active && manual_right_active) {
+        marker_info = " | M: L " + std::to_string(std::min(manual_left_start, manual_left_end) + 1) + ".." +
+                      std::to_string(std::max(manual_left_start, manual_left_end) + 1) + ", R " +
+                      std::to_string(std::min(manual_right_start, manual_right_end) + 1) + ".." +
+                      std::to_string(std::max(manual_right_start, manual_right_end) + 1);
+    } else if (manual_left_active) {
+        marker_info = " | M: L " + std::to_string(std::min(manual_left_start, manual_left_end) + 1) + ".." +
+                      std::to_string(std::max(manual_left_start, manual_left_end) + 1);
+    } else if (manual_right_active) {
+        marker_info = " | M: R " + std::to_string(std::min(manual_right_start, manual_right_end) + 1) + ".." +
+                      std::to_string(std::max(manual_right_start, manual_right_end) + 1);
+    }
+
     if (!hunk_diff_status_msg.empty()) {
-        snprintf(stats_buf, sizeof(stats_buf), "[hunk %d/%zu | Focus: %s | %s]",
-                 current_hunk_id, diff.hunks.size(), focus_str.c_str(), hunk_diff_status_msg.c_str());
+        snprintf(stats_buf, sizeof(stats_buf), "[hunk %d/%zu | Focus: %s%s | %s]",
+                 current_hunk_id, diff.hunks.size(), focus_str.c_str(), marker_info.c_str(), hunk_diff_status_msg.c_str());
     } else {
-        snprintf(stats_buf, sizeof(stats_buf), "[hunk %d/%zu | Focus: %s (Tab: switch)]",
-                 current_hunk_id, diff.hunks.size(), focus_str.c_str());
+        snprintf(stats_buf, sizeof(stats_buf), "[hunk %d/%zu | Focus: %s%s (Tab: switch)]",
+                 current_hunk_id, diff.hunks.size(), focus_str.c_str(), marker_info.c_str());
     }
 
     int stats_x = popup_x + popup_w - static_cast<int>(std::string(stats_buf).size()) - 3;
@@ -526,28 +694,58 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
         bool is_cursor_row = (row_idx == hunk_diff_cursor_row);
         bool is_hunk = (arow.hunk_idx != -1);
 
+        bool in_left_marker = manual_left_active &&
+            (row_idx >= std::min(manual_left_start, manual_left_end) &&
+             row_idx <= std::max(manual_left_start, manual_left_end));
+
+        bool in_right_marker = manual_right_active &&
+            (row_idx >= std::min(manual_right_start, manual_right_end) &&
+             row_idx <= std::max(manual_right_start, manual_right_end));
+
         uint8_t left_bg_r = 18, left_bg_g = 20, left_bg_b = 26;
         uint8_t right_bg_r = 18, right_bg_g = 20, right_bg_b = 26;
 
         if (is_cursor_row) {
             if (hunk_diff_focus == "left") {
-                left_bg_r = 40; left_bg_g = 60; left_bg_b = 110;
-                right_bg_r = 26; right_bg_g = 32; right_bg_b = 46;
+                left_bg_r = in_left_marker ? 65 : 40;
+                left_bg_g = in_left_marker ? 45 : 60;
+                left_bg_b = in_left_marker ? 95 : 110;
+                right_bg_r = in_right_marker ? 45 : 26;
+                right_bg_g = in_right_marker ? 28 : 32;
+                right_bg_b = in_right_marker ? 65 : 46;
             } else {
-                left_bg_r = 26; left_bg_g = 32; left_bg_b = 46;
-                right_bg_r = 40; right_bg_g = 60; right_bg_b = 110;
+                left_bg_r = in_left_marker ? 45 : 26;
+                left_bg_g = in_left_marker ? 28 : 32;
+                left_bg_b = in_left_marker ? 65 : 46;
+                right_bg_r = in_right_marker ? 65 : 40;
+                right_bg_g = in_right_marker ? 45 : 60;
+                right_bg_b = in_right_marker ? 95 : 110;
             }
-        } else if (is_hunk) {
-            const auto& hk = diff.hunks[arow.hunk_idx];
-            if (hk.kind == HunkType::ADDED) {
-                left_bg_r = 20; left_bg_g = 32; left_bg_b = 26;
-                right_bg_r = 22; right_bg_g = 40; right_bg_b = 30;
-            } else if (hk.kind == HunkType::DELETED) {
-                left_bg_r = 38; left_bg_g = 24; left_bg_b = 26;
-                right_bg_r = 30; right_bg_g = 20; right_bg_b = 22;
-            } else {
-                left_bg_r = 30; left_bg_g = 32; left_bg_b = 42;
-                right_bg_r = 28; right_bg_g = 30; right_bg_b = 40;
+        } else {
+            if (in_left_marker) {
+                left_bg_r = 45; left_bg_g = 28; left_bg_b = 65;
+            } else if (is_hunk) {
+                const auto& hk = diff.hunks[arow.hunk_idx];
+                if (hk.kind == HunkType::ADDED) {
+                    left_bg_r = 20; left_bg_g = 32; left_bg_b = 26;
+                } else if (hk.kind == HunkType::DELETED) {
+                    left_bg_r = 38; left_bg_g = 24; left_bg_b = 26;
+                } else {
+                    left_bg_r = 30; left_bg_g = 32; left_bg_b = 42;
+                }
+            }
+
+            if (in_right_marker) {
+                right_bg_r = 45; right_bg_g = 28; right_bg_b = 65;
+            } else if (is_hunk) {
+                const auto& hk = diff.hunks[arow.hunk_idx];
+                if (hk.kind == HunkType::ADDED) {
+                    right_bg_r = 22; right_bg_g = 40; right_bg_b = 30;
+                } else if (hk.kind == HunkType::DELETED) {
+                    right_bg_r = 30; right_bg_g = 20; right_bg_b = 22;
+                } else {
+                    right_bg_r = 28; right_bg_g = 30; right_bg_b = 40;
+                }
             }
         }
 
@@ -562,6 +760,9 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
         if (is_cursor_row && hunk_diff_focus == "left") {
             ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
             ncplane_putstr_yx(stdplane, draw_y, l_start_x, "▶");
+        } else if (in_left_marker) {
+            ncplane_set_fg_rgb8(stdplane, 220, 140, 255);
+            ncplane_putstr_yx(stdplane, draw_y, l_start_x, "M");
         } else {
             ncplane_putstr_yx(stdplane, draw_y, l_start_x, " ");
         }
@@ -569,7 +770,9 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
         char l_num[16];
         if (arow.left_idx >= 0) {
             snprintf(l_num, sizeof(l_num), "%4d ", arow.left_idx + 1);
-            if (is_cursor_row && hunk_diff_focus == "left") {
+            if (in_left_marker) {
+                ncplane_set_fg_rgb8(stdplane, 220, 140, 255);
+            } else if (is_cursor_row && hunk_diff_focus == "left") {
                 ncplane_set_fg_rgb8(stdplane, 100, 220, 255);
             } else if (is_hunk) {
                 ncplane_set_fg_rgb8(stdplane, 80, 190, 240);
@@ -636,6 +839,9 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
             } else {
                 ncplane_putstr_yx(stdplane, draw_y, divider_x, "▐");
             }
+        } else if (in_left_marker || in_right_marker) {
+            ncplane_set_fg_rgb8(stdplane, 220, 140, 255);
+            ncplane_putstr_yx(stdplane, draw_y, divider_x, "◈");
         } else if (is_hunk) {
             ncplane_set_fg_rgb8(stdplane, 100, 180, 255);
             ncplane_putstr_yx(stdplane, draw_y, divider_x, "◆");
@@ -654,6 +860,9 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
         if (is_cursor_row && hunk_diff_focus == "right") {
             ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
             ncplane_putstr_yx(stdplane, draw_y, right_x, "▶");
+        } else if (in_right_marker) {
+            ncplane_set_fg_rgb8(stdplane, 220, 140, 255);
+            ncplane_putstr_yx(stdplane, draw_y, right_x, "M");
         } else {
             ncplane_putstr_yx(stdplane, draw_y, right_x, " ");
         }
@@ -661,7 +870,9 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
         char r_num[16];
         if (arow.right_idx >= 0) {
             snprintf(r_num, sizeof(r_num), "%4d ", arow.right_idx + 1);
-            if (is_cursor_row && hunk_diff_focus == "right") {
+            if (in_right_marker) {
+                ncplane_set_fg_rgb8(stdplane, 220, 140, 255);
+            } else if (is_cursor_row && hunk_diff_focus == "right") {
                 ncplane_set_fg_rgb8(stdplane, 100, 220, 255);
             } else if (is_hunk) {
                 ncplane_set_fg_rgb8(stdplane, 80, 190, 240);
@@ -694,7 +905,7 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
     }
 
     // Footer actions on bottom border (following F11 vg footer style)
-    std::string footer = " [Tab] Switch  [l/L] Hunk  [a] Apply  [u] Undo  [d] Delete  [y] Yank  [p] Paste  [w] Write  [q/Esc] Close ";
+    std::string footer = " [Tab] Switch  [m/M] Mark  [a] Push  [A] Pull  [l/L] Hunk  [u] Undo  [d] Del  [y] Yank  [p] Paste  [w] Write  [q] Close ";
     ncplane_set_fg_rgb8(stdplane, 255, 215, 80);
     ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
     ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());

@@ -56,6 +56,15 @@ private:
     AlignedDiff hunk_diff_diff;
     std::shared_ptr<SyntaxHighlighter> hunk_diff_head_syntax;
 
+    // Manual block markers for left (working) and right (HEAD)
+    bool manual_left_active{false};
+    int manual_left_start{-1};
+    int manual_left_end{-1};
+
+    bool manual_right_active{false};
+    int manual_right_start{-1};
+    int manual_right_end{-1};
+
     bool leader_pending{false};
     bool show_whichkey_popup{false};
     std::chrono::steady_clock::time_point leader_start_time;
