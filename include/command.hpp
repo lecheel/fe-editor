@@ -94,4 +94,4 @@ struct CommandAutoRegistrar {
     }
 };
 
-#define REGISTER_COMMAND(cmd_var_name, names, description, handler_body) static CommandAutoRegistrar _reg_##cmd_var_name(names, description, handler_body);
+#define REGISTER_COMMAND(cmd_var_name, names, description, ...) static CommandAutoRegistrar _reg_##cmd_var_name(names, description, __VA_ARGS__);

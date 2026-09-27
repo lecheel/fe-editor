@@ -1,4 +1,5 @@
 #pragma once
+#include "action.hpp"
 #include <notcurses/notcurses.h>
 #include <cstdint>
 #include <cctype>
