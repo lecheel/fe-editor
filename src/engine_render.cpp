@@ -7,6 +7,17 @@
 
 namespace fs = std::filesystem;
 
+void VimEngine::render_window_separator(int y, unsigned int screen_w, bool is_active) {
+    if (is_active) {
+        ncplane_set_fg_rgb8(stdplane, 100, 180, 255);
+    } else {
+        ncplane_set_fg_rgb8(stdplane, 65, 75, 95);
+    }
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    std::string sep(screen_w, '-');
+    ncplane_putstr_yx(stdplane, y, 0, sep.c_str());
+}
+
 void VimEngine::update_window_scroll(Window& win, const TextBuffer& buf) {
     if (win.cursors.empty()) return;
     Cursor primary = win.cursors.front();
@@ -31,6 +42,13 @@ void VimEngine::render() {
 
     for (size_t wi = 0; wi < windows.size(); ++wi) {
         render_window(windows[wi], wi == active_win_idx);
+    }
+
+    if (split_mode != SplitType::VERTICAL && windows.size() > 1) {
+        for (size_t wi = 0; wi + 1 < windows.size(); ++wi) {
+            int sep_y = windows[wi].y + windows[wi].h;
+            render_window_separator(sep_y, screen_w, wi == active_win_idx);
+        }
     }
 
     render_status_bar(screen_h - 2, screen_w);

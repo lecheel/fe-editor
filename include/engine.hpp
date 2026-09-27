@@ -277,6 +277,7 @@ public:
     void update_window_scroll(Window& win, const TextBuffer& buf);
     void render();
     void render_window(Window& win, bool is_active);
+    void render_window_separator(int y, unsigned int screen_w, bool is_active);
     void render_status_bar(int y, unsigned int screen_w);
     void render_info_bar(int y, unsigned int screen_w);
 };

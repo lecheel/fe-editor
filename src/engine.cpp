@@ -474,12 +474,21 @@ void VimEngine::layout_windows() {
             windows[i].w = (i == n - 1) ? (edit_w - windows[i].x) : w_per_win;
         }
     } else {
-        int h_per_win = edit_h / n;
+        int num_seps = n - 1;
+        int avail_h = std::max(n, edit_h - num_seps);
+        int h_per_win = avail_h / n;
+        int rem = avail_h % n;
+        int cur_y = 0;
         for (int i = 0; i < n; ++i) {
+            int win_h = h_per_win + (i < rem ? 1 : 0);
             windows[i].x = 0;
             windows[i].w = edit_w;
-            windows[i].y = i * h_per_win;
-            windows[i].h = (i == n - 1) ? (edit_h - windows[i].y) : h_per_win;
+            windows[i].y = cur_y;
+            windows[i].h = win_h;
+            cur_y += win_h;
+            if (i < n - 1) {
+                cur_y += 1;
+            }
         }
     }
 }
