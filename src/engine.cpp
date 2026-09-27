@@ -173,6 +173,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     setlocale(LC_ALL, "");
 
     config.load();
+    keymap.load(config.get_config_dir());
 
     bool delta_mode = false;
     std::vector<std::string> filtered_files;

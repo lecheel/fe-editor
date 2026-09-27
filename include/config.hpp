@@ -35,6 +35,7 @@ public:
 
     bool get_position(const std::string& path, FilePosition& out) const;
     void set_position(const std::string& path, int y, int x, int scroll_y = 0);
+    const std::string& get_config_dir() const { return config_dir; }
 
 private:
     std::string config_dir;

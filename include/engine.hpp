@@ -5,6 +5,7 @@
 #include "window.hpp"
 #include "git.hpp"
 #include "command.hpp"
+#include "keymap.hpp"
 #include <notcurses/notcurses.h>
 #include <memory>
 #include <vector>
@@ -20,6 +21,7 @@ public:
         std::string text;
     };
     YankRegister yank_reg;
+    KeymapConfig keymap;
 
     explicit VimEngine(bool verbose = false, const std::vector<std::string>& files = {});
     ~VimEngine();
@@ -181,6 +183,7 @@ private:
 
     int get_line_num_w(const TextBuffer& buf) const;
 public:
+    ConfigManager& get_config() { return config; }
     void set_info_msg(std::string msg);
     Window& active_win();
     TextBuffer& active_buf();

@@ -77,4 +77,148 @@ inline bool is_colon(const ncinput& ni, uint32_t key) {
            (ni.shift && (key == ';' || ni.id == ';'));
 }
 
+inline std::string key_to_string(const ncinput& ni, uint32_t key) {
+    if (is_fkey(ni, key, 1)) return "<F1>";
+    if (is_fkey(ni, key, 2)) return "<F2>";
+    if (is_fkey(ni, key, 3)) return "<F3>";
+    if (is_fkey(ni, key, 4)) return "<F4>";
+    if (is_fkey(ni, key, 5)) return "<F5>";
+    if (is_fkey(ni, key, 6)) return "<F6>";
+    if (is_fkey(ni, key, 7)) return "<F7>";
+    if (is_fkey(ni, key, 8)) return "<F8>";
+    if (is_fkey(ni, key, 9)) return "<F9>";
+    if (is_fkey(ni, key, 10)) return "<F10>";
+    if (is_fkey(ni, key, 11)) return "<F11>";
+    if (is_fkey(ni, key, 12)) return "<F12>";
+
+    if (is_esc(ni, key)) return "<Esc>";
+    if (is_enter(ni, key)) return "<CR>";
+    if (is_backspace(ni, key)) return "<BS>";
+    if (key == '\t' || key == NCKEY_TAB || ni.id == '\t' || ni.id == NCKEY_TAB) {
+        if (ni.shift) return "<S-Tab>";
+        return "<Tab>";
+    }
+    if (key == NCKEY_UP || ni.id == NCKEY_UP) return "<Up>";
+    if (key == NCKEY_DOWN || ni.id == NCKEY_DOWN) return "<Down>";
+    if (key == NCKEY_LEFT || ni.id == NCKEY_LEFT) return "<Left>";
+    if (key == NCKEY_RIGHT || ni.id == NCKEY_RIGHT) return "<Right>";
+    if (key == NCKEY_HOME || ni.id == NCKEY_HOME) return "<Home>";
+    if (key == NCKEY_END || ni.id == NCKEY_END) return "<End>";
+    if (key == NCKEY_PGUP || ni.id == NCKEY_PGUP) return "<PageUp>";
+    if (key == NCKEY_PGDOWN || ni.id == NCKEY_PGDOWN) return "<PageDown>";
+    if (key == NCKEY_DEL || ni.id == NCKEY_DEL) return "<Del>";
+
+    if (key == ' ' && !ni.alt && !ni.ctrl) return "<Space>";
+
+    if (ni.alt) {
+        char ch = '\0';
+        if (ni.id >= 32 && ni.id < 127) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ni.id)));
+        else if (key >= 32 && key < 127) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(key)));
+        if (ch != '\0') {
+            return std::string("<A-") + ch + ">";
+        }
+    }
+
+    if (ni.ctrl) {
+        char ch = '\0';
+        if (ni.id >= 32 && ni.id < 127) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ni.id)));
+        else if (key >= 1 && key <= 26) ch = static_cast<char>('a' + key - 1);
+        else if (key >= 32 && key < 127) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(key)));
+        if (ch != '\0') {
+            return std::string("<C-") + ch + ">";
+        }
+    }
+
+    if (key >= 1 && key <= 26 && key != '\t' && key != '\n' && key != '\r' && key != 27) {
+        char ch = static_cast<char>('a' + key - 1);
+        return std::string("<C-") + ch + ">";
+    }
+
+    if (ni.utf8[0] != '\0' && ni.utf8[1] == '\0') {
+        return std::string(1, ni.utf8[0]);
+    }
+    if (key >= 32 && key < 127) {
+        return std::string(1, static_cast<char>(key));
+    }
+
+    return "";
+}
+
+inline std::string normalize_key_chord(const std::string& raw) {
+    if (raw.empty()) return "";
+    std::string s = raw;
+
+    if (s.rfind("<leader>", 0) == 0 || s.rfind("<Leader>", 0) == 0) {
+        s = "<Space>" + s.substr(8);
+    }
+
+    if (s.front() == '<' && s.back() == '>') {
+        std::string inner = s.substr(1, s.size() - 2);
+        std::string lower_inner = inner;
+        for (char& c : lower_inner) c = std::tolower(static_cast<unsigned char>(c));
+
+        if (lower_inner == "space") return "<Space>";
+        if (lower_inner == "cr" || lower_inner == "enter" || lower_inner == "return") return "<CR>";
+        if (lower_inner == "esc" || lower_inner == "escape") return "<Esc>";
+        if (lower_inner == "bs" || lower_inner == "backspace") return "<BS>";
+        if (lower_inner == "tab") return "<Tab>";
+        if (lower_inner == "s-tab" || lower_inner == "shift-tab") return "<S-Tab>";
+        if (lower_inner == "up") return "<Up>";
+        if (lower_inner == "down") return "<Down>";
+        if (lower_inner == "left") return "<Left>";
+        if (lower_inner == "right") return "<Right>";
+        if (lower_inner == "home") return "<Home>";
+        if (lower_inner == "end") return "<End>";
+        if (lower_inner == "pageup" || lower_inner == "pgup") return "<PageUp>";
+        if (lower_inner == "pagedown" || lower_inner == "pgdown") return "<PageDown>";
+        if (lower_inner == "del" || lower_inner == "delete") return "<Del>";
+
+        if (lower_inner.size() >= 2 && lower_inner[0] == 'f' && std::isdigit(static_cast<unsigned char>(lower_inner[1]))) {
+            int num = 0;
+            try { num = std::stoi(lower_inner.substr(1)); } catch (...) {}
+            if (num >= 1 && num <= 12) return "<F" + std::to_string(num) + ">";
+        }
+
+        if (lower_inner.rfind("c-", 0) == 0 && lower_inner.size() == 3) {
+            return std::string("<C-") + lower_inner[2] + ">";
+        }
+        if (lower_inner.rfind("ctrl-", 0) == 0 && lower_inner.size() == 6) {
+            return std::string("<C-") + lower_inner[5] + ">";
+        }
+
+        if (lower_inner.rfind("a-", 0) == 0 && lower_inner.size() == 3) {
+            return std::string("<A-") + lower_inner[2] + ">";
+        }
+        if (lower_inner.rfind("alt-", 0) == 0 && lower_inner.size() == 5) {
+            return std::string("<A-") + lower_inner[4] + ">";
+        }
+        if (lower_inner.rfind("m-", 0) == 0 && lower_inner.size() == 3) {
+            return std::string("<A-") + lower_inner[2] + ">";
+        }
+    }
+
+    if (s.size() >= 2 && (s[0] == 'F' || s[0] == 'f') && std::isdigit(static_cast<unsigned char>(s[1]))) {
+        int num = 0;
+        try { num = std::stoi(s.substr(1)); } catch (...) {}
+        if (num >= 1 && num <= 12) return "<F" + std::to_string(num) + ">";
+    }
+
+    return s;
+}
+
 } // namespace Keymap
+
+class VimEngine;
+enum class Mode;
+
+struct KeymapConfig {
+    std::string keymap_path;
+    std::unordered_map<std::string, std::string> normal_map;
+    std::unordered_map<std::string, std::string> insert_map;
+    std::unordered_map<std::string, std::string> visual_map;
+
+    void load(const std::string& config_dir);
+    bool execute_action(VimEngine& engine, Mode mode, const std::string& action);
+    bool handle_key(VimEngine& engine, Mode mode, const ncinput& ni, uint32_t key);
+    bool handle_whichkey(VimEngine& engine, const ncinput& ni, uint32_t key);
+};

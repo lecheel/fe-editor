@@ -6,6 +6,7 @@
 #include <cmath>
 #include <iostream>
 #include <sstream>
+#include <fstream>
 #include <filesystem>
 #include <map>
 #include <set>
@@ -17,6 +18,382 @@ extern int g_hunk_marker_style;
 namespace fs = std::filesystem;
 using namespace Keymap;
 
+namespace {
+
+struct KeymapJsonToken {
+    enum Type { LBRACE, RBRACE, COLON, COMMA, STRING, NUMBER, OTHER } type;
+    std::string value;
+};
+
+std::vector<KeymapJsonToken> tokenize_keymap_json(const std::string& text) {
+    std::vector<KeymapJsonToken> tokens;
+    size_t i = 0;
+    while (i < text.size()) {
+        char c = text[i];
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            i++;
+            continue;
+        }
+        if (c == '{') {
+            tokens.push_back({KeymapJsonToken::LBRACE, "{"});
+            i++;
+        } else if (c == '}') {
+            tokens.push_back({KeymapJsonToken::RBRACE, "}"});
+            i++;
+        } else if (c == ':') {
+            tokens.push_back({KeymapJsonToken::COLON, ":"});
+            i++;
+        } else if (c == ',') {
+            tokens.push_back({KeymapJsonToken::COMMA, ","});
+            i++;
+        } else if (c == '"') {
+            i++;
+            std::string s;
+            while (i < text.size()) {
+                if (text[i] == '\\' && i + 1 < text.size()) {
+                    s += text[i + 1];
+                    i += 2;
+                } else if (text[i] == '"') {
+                    i++;
+                    break;
+                } else {
+                    s += text[i++];
+                }
+            }
+            tokens.push_back({KeymapJsonToken::STRING, s});
+        } else {
+            i++;
+        }
+    }
+    return tokens;
+}
+
+} // namespace
+
+void KeymapConfig::load(const std::string& config_dir) {
+    keymap_path = (fs::path(config_dir) / "keymap.json").string();
+    normal_map.clear();
+    insert_map.clear();
+    visual_map.clear();
+
+    std::error_code ec;
+    if (!fs::exists(keymap_path, ec)) {
+        if (fs::exists("keymap.json", ec)) {
+            keymap_path = "keymap.json";
+        } else {
+            fs::create_directories(config_dir, ec);
+            std::ofstream out(keymap_path);
+            if (out.is_open()) {
+                out << "{\n"
+                    << "  \"normal\": {\n"
+                    << "    \"<C-s>\": \":w\",\n"
+                    << "    \"<Space>w\": \":w\",\n"
+                    << "    \"<Space>q\": \":q\",\n"
+                    << "    \"<Space>f\": \"filepicker\",\n"
+                    << "    \"<Space>g\": \"ripgrep\",\n"
+                    << "    \"<Space>b\": \"buffer_list\",\n"
+                    << "    \"<Space>d\": \"hunk_diff\",\n"
+                    << "    \"<Space>s\": \"git_status\",\n"
+                    << "    \"<Space>u\": \"undo\",\n"
+                    << "    \"H\": \"0\",\n"
+                    << "    \"L\": \"$\"\n"
+                    << "  },\n"
+                    << "  \"insert\": {\n"
+                    << "    \"<C-s>\": \":w\",\n"
+                    << "    \"<A-u>\": \"undo\",\n"
+                    << "    \"<A-d>\": \"delete_line\"\n"
+                    << "  },\n"
+                    << "  \"visual\": {\n"
+                    << "    \"<C-s>\": \":w\",\n"
+                    << "    \"H\": \"0\",\n"
+                    << "    \"L\": \"$\"\n"
+                    << "  }\n"
+                    << "}\n";
+            }
+        }
+    }
+
+    std::ifstream in(keymap_path);
+    if (!in.is_open()) return;
+
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string content = ss.str();
+    auto tokens = tokenize_keymap_json(content);
+
+    std::string current_mode_section;
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (tokens[i].type == KeymapJsonToken::STRING &&
+            i + 2 < tokens.size() &&
+            tokens[i + 1].type == KeymapJsonToken::COLON &&
+            tokens[i + 2].type == KeymapJsonToken::LBRACE) {
+            current_mode_section = tokens[i].value;
+            for (char& c : current_mode_section) c = std::tolower(static_cast<unsigned char>(c));
+            i += 2;
+            continue;
+        }
+
+        if (tokens[i].type == KeymapJsonToken::RBRACE) {
+            current_mode_section.clear();
+            continue;
+        }
+
+        if (!current_mode_section.empty() &&
+            tokens[i].type == KeymapJsonToken::STRING &&
+            i + 2 < tokens.size() &&
+            tokens[i + 1].type == KeymapJsonToken::COLON &&
+            tokens[i + 2].type == KeymapJsonToken::STRING) {
+
+            std::string key_str = Keymap::normalize_key_chord(tokens[i].value);
+            std::string action_str = tokens[i + 2].value;
+
+            if (current_mode_section == "normal" || current_mode_section == "norm" || current_mode_section == "n") {
+                normal_map[key_str] = action_str;
+            } else if (current_mode_section == "insert" || current_mode_section == "ins" || current_mode_section == "i") {
+                insert_map[key_str] = action_str;
+            } else if (current_mode_section == "visual" || current_mode_section == "vis" || current_mode_section == "v" ||
+                       current_mode_section == "visual_block") {
+                visual_map[key_str] = action_str;
+            }
+            i += 2;
+        }
+    }
+}
+
+bool KeymapConfig::execute_action(VimEngine& engine, Mode mode, const std::string& action) {
+    if (action.empty()) return false;
+
+    if (action.front() == ':') {
+        engine.execute_command(action.substr(1));
+        return true;
+    }
+
+    std::string act = action;
+    for (char& c : act) c = std::tolower(static_cast<unsigned char>(c));
+
+    if (act == "save" || act == "write" || act == "w") {
+        if (engine.active_buf().save_to_file()) {
+            engine.save_window_position(engine.active_win(), engine.active_buf());
+            engine.get_config().save();
+            engine.set_info_msg("\"" + engine.active_buf().name + "\" written");
+        } else {
+            engine.set_info_msg("E212: Can't open file for writing");
+        }
+        return true;
+    }
+
+    if (act == "quit" || act == "q") {
+        engine.execute_command("q");
+        return true;
+    }
+
+    if (act == "undo" || act == "u") {
+        if (engine.active_buf().undo(engine.active_win().cursors)) {
+            engine.active_win().clamp_all_cursors(engine.active_buf(), mode);
+            engine.update_window_scroll(engine.active_win(), engine.active_buf());
+            engine.set_info_msg("Undo applied.");
+        } else {
+            engine.set_info_msg("Already at oldest change.");
+        }
+        return true;
+    }
+
+    if (act == "redo") {
+        if (engine.active_buf().redo(engine.active_win().cursors)) {
+            engine.active_win().clamp_all_cursors(engine.active_buf(), mode);
+            engine.update_window_scroll(engine.active_win(), engine.active_buf());
+            engine.set_info_msg("Redo applied.");
+        } else {
+            engine.set_info_msg("Already at newest change.");
+        }
+        return true;
+    }
+
+    if (act == "filepicker" || act == "find_file" || act == "picker") {
+        engine.open_filepicker();
+        return true;
+    }
+
+    if (act == "git_status" || act == "git" || act == "gitview" || act == "gs") {
+        engine.open_git_status();
+        return true;
+    }
+
+    if (act == "hunk_diff" || act == "diff" || act == "delta") {
+        engine.open_hunk_diff();
+        return true;
+    }
+
+    if (act == "hunk_next") {
+        engine.jump_to_next_hunk();
+        return true;
+    }
+
+    if (act == "hunk_prev") {
+        engine.jump_to_prev_hunk();
+        return true;
+    }
+
+    if (act == "hunk_popup") {
+        engine.open_git_hunk_popup();
+        return true;
+    }
+
+    if (act == "revert_hunk") {
+        engine.revert_active_hunk();
+        return true;
+    }
+
+    if (act == "buffer_list" || act == "buffers" || act == "ls") {
+        engine.open_buffer_list();
+        return true;
+    }
+
+    if (act == "next_buffer" || act == "bn") {
+        engine.next_buffer();
+        return true;
+    }
+
+    if (act == "prev_buffer" || act == "bp") {
+        engine.prev_buffer();
+        return true;
+    }
+
+    if (act == "settings") {
+        engine.handle_key_input(ncinput{}, NCKEY_F09);
+        return true;
+    }
+
+    if (act == "ripgrep" || act == "grep" || act == "vg") {
+        std::string w = engine.get_word_under_cursor();
+        if (!w.empty()) engine.run_ripgrep(w);
+        else engine.execute_command("vg");
+        return true;
+    }
+
+    if (act == "help") {
+        engine.handle_key_input(ncinput{}, NCKEY_F12);
+        return true;
+    }
+
+    if (act == "split_h" || act == "split_horizontal" || act == "sp") {
+        engine.split_window(SplitType::HORIZONTAL);
+        return true;
+    }
+
+    if (act == "split_v" || act == "split_vertical" || act == "vsp") {
+        engine.split_window(SplitType::VERTICAL);
+        return true;
+    }
+
+    if (act == "close_window") {
+        engine.close_active_window();
+        return true;
+    }
+
+    if (act == "indent") {
+        engine.execute_command("indent");
+        return true;
+    }
+
+    if (act == "0" || act == "^" || act == "<home>") {
+        for (auto& c : engine.active_win().cursors) c.x = 0;
+        return true;
+    }
+
+    if (act == "$" || act == "<end>") {
+        for (auto& c : engine.active_win().cursors) {
+            c.x = engine.active_win().get_max_x(engine.active_buf(), c.y, mode);
+        }
+        return true;
+    }
+
+    if (act == "gg" || act == "top") {
+        for (auto& c : engine.active_win().cursors) { c.y = 0; c.x = 0; }
+        engine.active_win().clamp_all_cursors(engine.active_buf(), mode);
+        engine.update_window_scroll(engine.active_win(), engine.active_buf());
+        engine.set_info_msg("Top of file (gg)");
+        return true;
+    }
+
+    if (act == "g" || act == "bottom") {
+        int ly = std::max(0, static_cast<int>(engine.active_buf().lines.size()) - 1);
+        for (auto& c : engine.active_win().cursors) { c.y = ly; c.x = 0; }
+        engine.active_win().clamp_all_cursors(engine.active_buf(), mode);
+        engine.update_window_scroll(engine.active_win(), engine.active_buf());
+        engine.set_info_msg("End of file (G)");
+        return true;
+    }
+
+    if (act == "delete_line") {
+        auto& win = engine.active_win();
+        auto& buf = engine.active_buf();
+        buf.push_undo(win.cursors);
+        std::set<int> lines_to_delete;
+        for (const auto& c : win.cursors) {
+            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                lines_to_delete.insert(c.y);
+            }
+        }
+        std::vector<int> sorted_lines(lines_to_delete.rbegin(), lines_to_delete.rend());
+        for (int y : sorted_lines) {
+            if (buf.lines.size() > 1) {
+                buf.lines.erase(buf.lines.begin() + y);
+            } else {
+                buf.lines[0] = "";
+            }
+        }
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.clamp_all_cursors(buf, mode);
+        win.deduplicate_cursors();
+        engine.update_window_scroll(win, buf);
+        engine.set_info_msg("Line deleted.");
+        return true;
+    }
+
+    engine.execute_command(action);
+    return true;
+}
+
+bool KeymapConfig::handle_key(VimEngine& engine, Mode mode, const ncinput& ni, uint32_t key) {
+    std::string k_str = Keymap::key_to_string(ni, key);
+    if (k_str.empty()) return false;
+
+    const std::unordered_map<std::string, std::string>* target_map = nullptr;
+    if (mode == Mode::NORMAL) target_map = &normal_map;
+    else if (mode == Mode::INSERT) target_map = &insert_map;
+    else if (mode == Mode::VISUAL || mode == Mode::VISUAL_BLOCK) target_map = &visual_map;
+
+    if (!target_map) return false;
+
+    auto it = target_map->find(k_str);
+    if (it != target_map->end()) {
+        return execute_action(engine, mode, it->second);
+    }
+    return false;
+}
+
+bool KeymapConfig::handle_whichkey(VimEngine& engine, const ncinput& ni, uint32_t key) {
+    if (is_esc(ni, key)) {
+        engine.set_info_msg("");
+        return true;
+    }
+
+    std::string k_str = Keymap::key_to_string(ni, key);
+    if (k_str.empty()) return false;
+
+    std::string chord = "<Space>" + k_str;
+    auto it = normal_map.find(chord);
+    if (it != normal_map.end()) {
+        execute_action(engine, Mode::NORMAL, it->second);
+        return true;
+    }
+    return false;
+}
+
 REGISTER_COMMAND(
     minimap,
     (std::vector<std::string>{"minimap", "mm"}),
@@ -26,6 +403,25 @@ REGISTER_COMMAND(
             ctx.engine.set_info_msg("Minimap: " + ctx.args);
         } else {
             ctx.engine.set_info_msg("Minimap toggled.");
+        }
+    }
+);
+
+REGISTER_COMMAND(
+    keymap,
+    (std::vector<std::string>{"keymap", "keybind", "bind"}),
+    "Open or reload ~/.config/fe/keymap.json (:keymap [reload])",
+    [](CommandContext& ctx) {
+        if (!ctx.argv.empty() && (ctx.argv[0] == "reload" || ctx.argv[0] == "r")) {
+            ctx.engine.keymap.load(ctx.engine.get_config().get_config_dir());
+            ctx.engine.set_info_msg("Reloaded keymap from " + ctx.engine.keymap.keymap_path);
+        } else {
+            std::string path = ctx.engine.keymap.keymap_path;
+            if (path.empty()) {
+                path = (fs::path(ctx.engine.get_config().get_config_dir()) / "keymap.json").string();
+            }
+            ctx.engine.execute_command("e " + path);
+            ctx.engine.set_info_msg("Opened keymap: " + path + " (use :keymap reload after saving)");
         }
     }
 );
@@ -1269,6 +1665,10 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
     leader_pending = false;
     show_whichkey_popup = false;
 
+    if (keymap.handle_whichkey(*this, ni, key)) {
+        return;
+    }
+
     if (is_esc(ni, key) || key == ' ') {
         set_info_msg("");
         return;
@@ -1802,6 +2202,13 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
     AutocompleteState::instance().reset();
     auto& win = active_win();
     auto& buf = active_buf();
+
+    if (!s_d_pending && !s_dg_pending && !s_y_pending && !s_g_pending &&
+        !s_equal_pending && !s_greater_pending && !s_less_pending) {
+        if (keymap.handle_key(*this, mode, ni, key)) {
+            return;
+        }
+    }
 
     if (s_d_pending) {
         s_d_pending = false;
@@ -2356,6 +2763,12 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
     AutocompleteState::instance().reset();
     auto& win = active_win();
     auto& buf = active_buf();
+
+    if (!s_visual_g_pending) {
+        if (keymap.handle_key(*this, mode, ni, key)) {
+            return;
+        }
+    }
 
     if (key == NCKEY_ESC) {
         s_visual_g_pending = false;
@@ -3176,6 +3589,10 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
     auto& ac = AutocompleteState::instance();
+
+    if (keymap.handle_key(*this, mode, ni, key)) {
+        return;
+    }
 
     if (win.cursors.size() > 1) {
         ac.reset();
