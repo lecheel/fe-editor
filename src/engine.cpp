@@ -244,7 +244,8 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   Options:        Toggle line numbers, Style (Absolute/Relative/Hybrid), Width, Active highlight, Hunk style (~-= or |)",
             "",
             "// --- Navigation & Editing ------------------------------------------------",
-            "//   h / j / k / l   Move left, down, up, right (also Arrows, Home, End, PgUp, PgDown)",
+            "//   h / j / k       Move left, down, up (also Arrows, Home, End, PgUp, PgDown)",
+            "//   l / L           Jump to next / previous git hunk (like F3 / F2)",
             "//   0 / $           Jump to line start / end",
             "//   gg / G          Jump to top / end of file",
             "//   yy / p / P      Yank line, paste after / paste before cursor",
@@ -523,26 +524,6 @@ void VimEngine::run() {
             continue;
         }
 
-        if (key == NCKEY_F02 || ni.id == NCKEY_F02) {
-            jump_to_prev_hunk();
-            continue;
-        }
-
-        if (key == NCKEY_F03 || ni.id == NCKEY_F03) {
-            jump_to_next_hunk();
-            continue;
-        }
-
-        if (key == NCKEY_F04 || ni.id == NCKEY_F04) {
-            if (show_git_hunk_popup) {
-                show_git_hunk_popup = false;
-            } else {
-                show_whichkey_popup = false;
-                open_git_hunk_popup();
-            }
-            continue;
-        }
-
         if (key == NCKEY_F05 || ni.id == NCKEY_F05) {
             if (show_hunk_diff) {
                 close_hunk_diff();
@@ -560,6 +541,26 @@ void VimEngine::run() {
 
         if (show_hunk_diff) {
             handle_hunk_diff_input(ni, key);
+            continue;
+        }
+
+        if (key == NCKEY_F02 || ni.id == NCKEY_F02) {
+            jump_to_prev_hunk();
+            continue;
+        }
+
+        if (key == NCKEY_F03 || ni.id == NCKEY_F03) {
+            jump_to_next_hunk();
+            continue;
+        }
+
+        if (key == NCKEY_F04 || ni.id == NCKEY_F04) {
+            if (show_git_hunk_popup) {
+                show_git_hunk_popup = false;
+            } else {
+                show_whichkey_popup = false;
+                open_git_hunk_popup();
+            }
             continue;
         }
 

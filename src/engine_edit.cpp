@@ -430,7 +430,10 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
             for (auto& c : win.cursors) c.x = std::max(0, c.x - 1);
             break;
         case 'l':
-            for (auto& c : win.cursors) c.x = std::min(win.get_max_x(buf, c.y, mode), c.x + 1);
+            jump_to_next_hunk();
+            break;
+        case 'L':
+            jump_to_prev_hunk();
             break;
         case 'k':
             for (auto& c : win.cursors) c.y = std::max(0, c.y - 1);
@@ -676,9 +679,6 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
     switch (key) {
         case 'h':
             for (auto& c : win.cursors) c.x = std::max(0, c.x - 1);
-            break;
-        case 'l':
-            for (auto& c : win.cursors) c.x = std::min(win.get_max_x(buf, c.y, mode), c.x + 1);
             break;
         case 'k':
             for (auto& c : win.cursors) c.y = std::max(0, c.y - 1);

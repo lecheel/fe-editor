@@ -158,9 +158,10 @@ void VimEngine::handle_git_hunk_popup(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (key == NCKEY_F02 || (ni.id == NCKEY_F02) || key == NCKEY_UP || key == 'k' || key == 'K') {
+    if (key == NCKEY_F02 || (ni.id == NCKEY_F02) || key == NCKEY_UP || key == 'k' || key == 'K' ||
+        key == 'L' || (ni.shift && (key == 'l' || ni.id == 'l' || ni.id == 'L'))) {
         active_hunk_idx = (active_hunk_idx + static_cast<int>(hunks.size()) - 1) % hunks.size();
-    } else if (key == NCKEY_F03 || (ni.id == NCKEY_F03) || key == NCKEY_DOWN || key == 'j' || key == 'J') {
+    } else if (key == NCKEY_F03 || (ni.id == NCKEY_F03) || key == NCKEY_DOWN || key == 'j' || key == 'J' || key == 'l') {
         active_hunk_idx = (active_hunk_idx + 1) % hunks.size();
     }
 }
@@ -963,13 +964,16 @@ void VimEngine::handle_hunk_diff_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (key == 'l') {
+    if (key == 'l' || key == NCKEY_F03 || ni.id == NCKEY_F03) {
         hunk_diff_cursor_row = diff.next_hunk_row(hunk_diff_cursor_row);
+        hunk_diff_status_msg.clear();
         return;
     }
 
-    if (key == 'L') {
+    if (key == 'L' || (ni.shift && (key == 'l' || ni.id == 'l' || ni.id == 'L')) ||
+        key == NCKEY_F02 || ni.id == NCKEY_F02) {
         hunk_diff_cursor_row = diff.prev_hunk_row(hunk_diff_cursor_row);
+        hunk_diff_status_msg.clear();
         return;
     }
 
@@ -1613,7 +1617,38 @@ void VimEngine::open_filepicker() {
 
 void VimEngine::scan_project_files() {
     filepicker_all_files.clear();
+    filepicker_git_status.clear();
     std::string root = !project_dir.empty() ? project_dir : ".";
+
+    std::string repo_root = detect_git_repo_root(root);
+    if (!repo_root.empty()) {
+        GitViewData gdata = query_git_view_data(repo_root);
+        if (gdata.is_repo) {
+            for (const auto& f : gdata.staged) {
+                filepicker_git_status[f.path] = f.glyph;
+            }
+            for (const auto& f : gdata.unstaged) {
+                filepicker_git_status[f.path] = f.glyph;
+            }
+            for (const auto& f : gdata.untracked) {
+                filepicker_git_status[f.path] = '?';
+            }
+        }
+    }
+
+    for (const auto& b : buffers) {
+        if (b->modified) {
+            std::string rel = b->name;
+            if (!b->file_path.empty()) {
+                std::error_code ec;
+                std::string r = fs::relative(b->file_path, !repo_root.empty() ? repo_root : root, ec).string();
+                if (!ec && !r.empty() && r.rfind("..", 0) != 0) {
+                    rel = r;
+                }
+            }
+            filepicker_git_status[rel] = 'M';
+        }
+    }
 
     bool used_git = get_git_project_files(root, filepicker_all_files);
 
@@ -1864,15 +1899,34 @@ void VimEngine::render_filepicker(unsigned int screen_h, unsigned int screen_w) 
             if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 205, 60);
             ncplane_putstr_yx(stdplane, draw_y, popup_x + 2, prefix.c_str());
 
+            std::string fn = filepicker_filtered_files[idx];
+            char marker = ' ';
+            auto st_it = filepicker_git_status.find(fn);
+            if (st_it != filepicker_git_status.end()) {
+                marker = st_it->second;
+            }
+
+            if (marker != ' ') {
+                if (marker == 'M') ncplane_set_fg_rgb8(stdplane, 240, 200, 80);
+                else if (marker == 'A') ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+                else if (marker == 'D') ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
+                else if (marker == '?') ncplane_set_fg_rgb8(stdplane, 80, 200, 240);
+                else ncplane_set_fg_rgb8(stdplane, 220, 225, 235);
+
+                char m_buf[3] = {marker, ' ', '\0'};
+                ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, m_buf);
+            } else {
+                ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, "  ");
+            }
+
             if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
             else ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
 
-            std::string fn = filepicker_filtered_files[idx];
-            int max_len = popup_w - 7;
+            int max_len = popup_w - 9;
             if (static_cast<int>(fn.size()) > max_len) {
                 fn = "..." + fn.substr(fn.size() - max_len + 3);
             }
-            ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, fn.c_str());
+            ncplane_putstr_yx(stdplane, draw_y, popup_x + 7, fn.c_str());
         }
     }
 

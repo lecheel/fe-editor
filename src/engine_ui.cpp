@@ -873,7 +873,7 @@ void VimEngine::render_git_hunk_popup(unsigned int screen_h, unsigned int screen
     // Footer actions
     ncplane_set_fg_rgb8(stdplane, 255, 230, 100);
     ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
-    std::string footer = " [r] Revert Hunk   [F2/F3] Prev/Next   [Esc/F4/q] Close ";
+    std::string footer = " [r] Revert Hunk   [Esc/q] Close ";
     if (static_cast<int>(footer.size()) < popup_w - 2) {
         ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 2, footer.c_str());
     }

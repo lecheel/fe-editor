@@ -10,6 +10,7 @@
 #include <vector>
 #include <string>
 #include <chrono>
+#include <unordered_map>
 
 class VimEngine {
 public:
@@ -130,6 +131,7 @@ private:
     std::string filepicker_query;
     std::vector<std::string> filepicker_all_files;
     std::vector<std::string> filepicker_filtered_files;
+    std::unordered_map<std::string, char> filepicker_git_status;
     int filepicker_selected_idx{0};
     int filepicker_scroll{0};
 
