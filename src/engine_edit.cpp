@@ -547,6 +547,19 @@ bool KeymapConfig::execute_action(VimEngine& engine, Mode mode, const std::strin
     return true;
 }
 
+bool KeymapConfig::has_mapping(Mode mode, const ncinput& ni, uint32_t key) const {
+    std::string k_str = Keymap::key_to_string(ni, key);
+    if (k_str.empty()) return false;
+
+    const std::unordered_map<std::string, std::string>* target_map = nullptr;
+    if (mode == Mode::NORMAL) target_map = &normal_map;
+    else if (mode == Mode::INSERT) target_map = &insert_map;
+    else if (mode == Mode::VISUAL || mode == Mode::VISUAL_BLOCK) target_map = &visual_map;
+
+    if (!target_map) return false;
+    return target_map->find(k_str) != target_map->end();
+}
+
 bool KeymapConfig::handle_key(VimEngine& engine, Mode mode, const ncinput& ni, uint32_t key) {
     std::string k_str = Keymap::key_to_string(ni, key);
     if (k_str.empty()) return false;
@@ -960,7 +973,11 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
     }
 
     // 11. Global shortcuts (Alt combinations, window cycling, etc.)
-    if (handle_global_shortcuts(ni, key)) {
+    // If the active mode has a custom keymap in keymap.json for this key chord,
+    // let modal dispatch handle it instead of built-in global shortcuts!
+    if (mode != Mode::COMMAND && keymap.has_mapping(mode, ni, key)) {
+        // Let modal dispatch in Step 12 handle user's keymap
+    } else if (handle_global_shortcuts(ni, key)) {
         return;
     }
 

@@ -374,7 +374,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
                      std::to_string(cy) + ":" +
                      std::to_string(cx) + "]");
     } else {
-        set_info_msg("[F12] Help | [F1] Git View | [F5] Hunk Diff | [F4] Popup | [F2/F3] Hunks | [F9] Settings | [Space] Leader");
+        // set_info_msg("[F12] Help | [F1] Git View | [F5] Hunk Diff | [F4] Popup | [F2/F3] Hunks | [F9] Settings | [Space] Leader");
     }
 }
 

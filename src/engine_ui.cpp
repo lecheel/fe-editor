@@ -344,7 +344,7 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
     }
 
     // Header Title
-    std::string title = " Help ";
+    std::string title = " MiniHelp ";
     ncplane_set_fg_rgb8(stdplane, 160, 220, 230);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 

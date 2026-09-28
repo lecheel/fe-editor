@@ -390,4 +390,5 @@ struct KeymapConfig {
     bool execute_action(VimEngine& engine, Mode mode, const std::string& action);
     bool handle_key(VimEngine& engine, Mode mode, const ncinput& ni, uint32_t key);
     bool handle_whichkey(VimEngine& engine, const ncinput& ni, uint32_t key);
+    bool has_mapping(Mode mode, const ncinput& ni, uint32_t key) const;
 };
