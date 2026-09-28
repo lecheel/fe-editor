@@ -65,6 +65,17 @@ bool git_stash_push(const std::string& repo_root);
 bool git_stash_pop(const std::string& repo_root, int stash_idx);
 bool git_stash_drop(const std::string& repo_root, int stash_idx);
 
+struct GitCommandResult {
+    bool success{false};
+    int exit_code{0};
+    std::string summary;
+    std::vector<std::string> raw_lines;
+};
+
+GitCommandResult git_stash_push_info(const std::string& repo_root);
+GitCommandResult git_stash_pop_info(const std::string& repo_root, int stash_idx);
+GitCommandResult git_stash_drop_info(const std::string& repo_root, int stash_idx);
+
 std::vector<std::string> git_get_file_lines(const std::string& repo_root,
                                             const std::string& rev,
                                             const std::string& rel_path);

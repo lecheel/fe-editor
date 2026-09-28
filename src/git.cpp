@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <sys/wait.h>
 
 namespace fs = std::filesystem;
 
@@ -422,18 +423,118 @@ bool git_checkout_branch(const std::string& repo_root, const std::string& branch
     return run_git_cmd_status(repo_root, cmd) == 0;
 }
 
+static GitCommandResult exec_git_capture(const std::string& repo_root, const std::string& args) {
+    GitCommandResult res;
+    std::string cmd = "git -C \"" + repo_root + "\" " + args + " 2>&1";
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) {
+        res.summary = "Failed to spawn git process";
+        return res;
+    }
+
+    char buf[1024];
+    while (fgets(buf, sizeof(buf), fp)) {
+        std::string line(buf);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+            line.pop_back();
+        }
+        if (!line.empty()) {
+            res.raw_lines.push_back(line);
+        }
+    }
+    int status = pclose(fp);
+    if (WIFEXITED(status)) {
+        res.exit_code = WEXITSTATUS(status);
+    } else {
+        res.exit_code = status;
+    }
+    res.success = (res.exit_code == 0);
+    return res;
+}
+
+GitCommandResult git_stash_push_info(const std::string& repo_root) {
+    auto res = exec_git_capture(repo_root, "stash push");
+    if (res.success) {
+        for (const auto& line : res.raw_lines) {
+            size_t idx = line.find("Saved working directory and index state ");
+            if (idx != std::string::npos) {
+                res.summary = "Saved " + line.substr(idx + 40);
+                return res;
+            }
+        }
+        res.summary = "Stashed working changes";
+    } else {
+        std::string err = !res.raw_lines.empty() ? res.raw_lines[0] : "Failed to stash changes";
+        res.summary = "Failed to stash: " + err;
+    }
+    return res;
+}
+
+GitCommandResult git_stash_pop_info(const std::string& repo_root, int stash_idx) {
+    std::string target = "stash@{" + std::to_string(stash_idx) + "}";
+    auto res = exec_git_capture(repo_root, "stash pop " + target);
+
+    for (const auto& line : res.raw_lines) {
+        if (line.find("CONFLICT") != std::string::npos) {
+            size_t in_pos = line.find(" in ");
+            std::string conflict_file = (in_pos != std::string::npos) ? line.substr(in_pos + 4) : "files";
+            res.summary = "Conflict in " + conflict_file + " (" + target + " retained)";
+            res.success = false;
+            return res;
+        }
+    }
+
+    if (res.success) {
+        int mod_files = 0;
+        bool dropped = false;
+        for (const auto& line : res.raw_lines) {
+            if (line.find("modified:") != std::string::npos || line.find("Auto-merging") != std::string::npos) {
+                mod_files++;
+            }
+            if (line.find("Dropped refs/stash") != std::string::npos || line.find("Dropped stash") != std::string::npos) {
+                dropped = true;
+            }
+        }
+        res.summary = "Popped " + target;
+        if (mod_files > 0) res.summary += " (" + std::to_string(mod_files) + (mod_files == 1 ? " file" : " files") + ")";
+        if (dropped) res.summary += " - dropped";
+        return res;
+    }
+
+    for (const auto& line : res.raw_lines) {
+        if (line.find("error:") != std::string::npos) {
+            res.summary = line;
+            return res;
+        }
+    }
+
+    std::string err = !res.raw_lines.empty() ? res.raw_lines[0] : ("Failed to pop " + target);
+    res.summary = err;
+    return res;
+}
+
+GitCommandResult git_stash_drop_info(const std::string& repo_root, int stash_idx) {
+    std::string target = "stash@{" + std::to_string(stash_idx) + "}";
+    auto res = exec_git_capture(repo_root, "stash drop " + target);
+    if (res.success) {
+        res.summary = "Dropped " + target;
+    } else {
+        std::string err = !res.raw_lines.empty() ? res.raw_lines[0] : ("Failed to drop " + target);
+        res.summary = err;
+    }
+    return res;
+}
+
 bool git_stash_push(const std::string& repo_root) {
-    return run_git_cmd_status(repo_root, "stash push") == 0;
+    return git_stash_push_info(repo_root).success;
 }
 
 bool git_stash_pop(const std::string& repo_root, int stash_idx) {
-    std::string cmd = "stash pop stash@{" + std::to_string(stash_idx) + "}";
-    return run_git_cmd_status(repo_root, cmd) == 0;
+    return git_stash_pop_info(repo_root, stash_idx).success;
 }
 
 bool git_stash_drop(const std::string& repo_root, int stash_idx) {
-    std::string cmd = "stash drop stash@{" + std::to_string(stash_idx) + "}";
-    return run_git_cmd_status(repo_root, cmd) == 0;
+    return git_stash_drop_info(repo_root, stash_idx).success;
 }
 
 std::vector<std::string> git_get_file_lines(const std::string& repo_root,

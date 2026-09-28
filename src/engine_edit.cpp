@@ -1042,34 +1042,22 @@ void VimEngine::handle_git_status_input(const ncinput& ni, uint32_t key) {
         }
 
         if (key == 'y' || key == 'Y') {
-            if (!git_is_clean(root)) {
-                git_stash_status_msg = "Working tree not clean — commit or stash first";
-                return;
-            }
-            if (git_stash_pop(root, git_stash_action_idx)) {
-                git_stash_action_active = false;
-                git_stash_status_msg.clear();
-                refresh_git_status();
-                git_status_msg = "Popped " + git_stash_action_ref;
-            } else {
-                git_stash_status_msg = "Failed to pop " + git_stash_action_ref;
-            }
+            auto res = git_stash_pop_info(root, git_stash_action_idx);
+            git_stash_action_active = false;
+            git_stash_status_msg.clear();
+            refresh_git_status();
+            git_status_msg = res.summary;
+            set_info_msg(res.summary);
             return;
         }
 
         if (key == 'd' || key == 'D') {
-            if (!git_is_clean(root)) {
-                git_stash_status_msg = "Working tree not clean — commit or stash first";
-                return;
-            }
-            if (git_stash_drop(root, git_stash_action_idx)) {
-                git_stash_action_active = false;
-                git_stash_status_msg.clear();
-                refresh_git_status();
-                git_status_msg = "Dropped " + git_stash_action_ref;
-            } else {
-                git_stash_status_msg = "Failed to drop " + git_stash_action_ref;
-            }
+            auto res = git_stash_drop_info(root, git_stash_action_idx);
+            git_stash_action_active = false;
+            git_stash_status_msg.clear();
+            refresh_git_status();
+            git_status_msg = res.summary;
+            set_info_msg(res.summary);
             return;
         }
         return;
@@ -1145,12 +1133,10 @@ void VimEngine::handle_git_status_input(const ncinput& ni, uint32_t key) {
             git_status_msg = "Nothing to stash";
             return;
         }
-        if (git_stash_push(root)) {
-            refresh_git_status();
-            git_status_msg = "Stashed working changes";
-        } else {
-            git_status_msg = "Failed to stash changes";
-        }
+        auto res = git_stash_push_info(root);
+        refresh_git_status();
+        git_status_msg = res.summary;
+        set_info_msg(res.summary);
         return;
     }
 
