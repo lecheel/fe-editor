@@ -375,7 +375,7 @@ void VimEngine::render_git_status(unsigned int screen_h, unsigned int screen_w) 
     }
 
     // Title
-    std::string title = " Git Status View (F1 / F6) ";
+    std::string title = " Git Status View (F1) ";
     ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 

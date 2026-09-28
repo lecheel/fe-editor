@@ -214,7 +214,7 @@ void ActionRegistry::init_default_actions() {
         }
     );
 
-    register_action("git_status", {"git", "gitview", "gs"}, "Git", "Open git status view (F1/F6)",
+    register_action("git_status", {"git", "gitview", "gs"}, "Git", "Open git status view (F1)",
         [](ActionContext& ctx) {
             ctx.engine.open_git_status();
             return true;
@@ -840,8 +840,8 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    // 2. Git Status view (F1 / F6)
-    if (is_fkey(ni, key, 1) || is_fkey(ni, key, 6)) {
+    // 2. Git Status view (F1)
+    if (is_fkey(ni, key, 1)) {
         if (show_git_status) {
             close_git_status();
         } else {
@@ -2348,7 +2348,7 @@ REGISTER_COMMAND(
 REGISTER_COMMAND(
     gitview,
     (std::vector<std::string>{"git", "gitstatus", "gitview", "gs"}),
-    "Open git status view (F1 / F6)",
+    "Open git status view (F1)",
     [](CommandContext& ctx) {
         ctx.engine.open_git_status();
     }

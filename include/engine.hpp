@@ -66,7 +66,7 @@ private:
     bool show_git_hunk_popup{false};
     int active_hunk_idx{0};
 
-    // F1 / F6 Git Status View (gitview.md) state
+    // F1 Git Status View (gitview.md) state
     bool show_git_status{false};
     GitViewData git_view_data;
     struct GitStatusRow {

@@ -302,7 +302,7 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
         {"F3", "Next Hunk"},
         {"F4", "Hunk Popup"},
         {"F5", "Hunk Diff"},
-        {"F6", "Git View"}
+        {"F6", "--"}
     };
 
     std::vector<Slot> row2 = {
