@@ -290,6 +290,125 @@ void VimEngine::render_cmd_completion(unsigned int screen_h, unsigned int screen
     ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
 }
 
+void VimEngine::render_theme_popup(unsigned int screen_h, unsigned int screen_w) {
+    int popup_w = std::max(44, static_cast<int>(screen_w * 0.45));
+    popup_w = std::min(popup_w, static_cast<int>(screen_w) - 4);
+    int popup_h = std::min(14, static_cast<int>(screen_h) - 4);
+    popup_h = std::max(6, popup_h);
+
+    int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
+    int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
+
+    auto& theme = HelixTheme::instance();
+    auto popup_style = theme.get_ui_style("ui.popup", {{212, 212, 212}, {37, 37, 38}, true, true});
+    auto border_col  = theme.get_color("blue", {0, 122, 204});
+    auto title_col   = theme.get_color("gold", {215, 186, 125});
+    auto sel_style   = theme.get_ui_style("ui.menu.selected", {{255, 255, 255}, {9, 71, 113}, true, true});
+    auto text_col    = theme.get_color("text", {212, 212, 212});
+    auto active_col  = theme.get_color("dark_green2", {72, 126, 2});
+
+    ncplane_set_bg_rgb8(stdplane, popup_style.bg.r, popup_style.bg.g, popup_style.bg.b);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    ncplane_set_fg_rgb8(stdplane, border_col.r, border_col.g, border_col.b);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+
+    std::string title = " Themes (F6) ";
+    ncplane_set_fg_rgb8(stdplane, title_col.r, title_col.g, title_col.b);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    std::string count_str = " (" + std::to_string(theme_list.size()) + ") ";
+    int cs_x = popup_x + popup_w - static_cast<int>(count_str.size()) - 2;
+    if (cs_x > popup_x + static_cast<int>(title.size()) + 4) {
+        ncplane_set_fg_rgb8(stdplane, 140, 150, 175);
+        ncplane_putstr_yx(stdplane, popup_y, cs_x, count_str.c_str());
+    }
+
+    int visible_rows = popup_h - 2;
+    if (theme_selected_idx < theme_scroll) {
+        theme_scroll = theme_selected_idx;
+    }
+    if (theme_selected_idx >= theme_scroll + visible_rows) {
+        theme_scroll = theme_selected_idx - visible_rows + 1;
+    }
+    theme_scroll = std::max(0, theme_scroll);
+
+    std::string cur_active = config.settings.theme.empty() ? "dark_plus" : config.settings.theme;
+
+    for (int r = 0; r < visible_rows; ++r) {
+        int idx = theme_scroll + r;
+        int draw_y = popup_y + 1 + r;
+
+        if (idx < static_cast<int>(theme_list.size())) {
+            bool is_sel = (idx == theme_selected_idx);
+            bool is_cur = (theme_list[idx] == cur_active);
+
+            if (is_sel) {
+                ncplane_set_bg_rgb8(stdplane, sel_style.bg.r, sel_style.bg.g, sel_style.bg.b);
+            } else {
+                ncplane_set_bg_rgb8(stdplane, popup_style.bg.r, popup_style.bg.g, popup_style.bg.b);
+            }
+
+            for (int c = 1; c < popup_w - 1; ++c) {
+                ncplane_putchar_yx(stdplane, draw_y, popup_x + c, ' ');
+            }
+
+            int cur_x = popup_x + 2;
+            if (is_sel) {
+                ncplane_set_fg_rgb8(stdplane, title_col.r, title_col.g, title_col.b);
+                ncplane_putstr_yx(stdplane, draw_y, cur_x, "▶ ");
+            } else {
+                ncplane_putstr_yx(stdplane, draw_y, cur_x, "  ");
+            }
+            cur_x += 2;
+
+            if (is_sel) {
+                ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+            } else if (is_cur) {
+                ncplane_set_fg_rgb8(stdplane, 130, 220, 255);
+            } else {
+                ncplane_set_fg_rgb8(stdplane, text_col.r, text_col.g, text_col.b);
+            }
+            std::string tname = theme_list[idx];
+            int max_w = popup_w - 16;
+            if (static_cast<int>(tname.size()) > max_w && max_w > 0) {
+                tname = tname.substr(0, max_w);
+            }
+            ncplane_putstr_yx(stdplane, draw_y, cur_x, tname.c_str());
+
+            if (is_cur) {
+                std::string badge = "[active]";
+                int bx = popup_x + popup_w - static_cast<int>(badge.size()) - 3;
+                if (bx > cur_x + static_cast<int>(tname.size()) + 1) {
+                    ncplane_set_fg_rgb8(stdplane, active_col.r, active_col.g, active_col.b);
+                    ncplane_putstr_yx(stdplane, draw_y, bx, badge.c_str());
+                }
+            }
+        }
+    }
+
+    std::string footer = " [▲/▼] Navigate  [Enter] Select  [Esc/F6] Close ";
+    ncplane_set_fg_rgb8(stdplane, 140, 150, 160);
+    ncplane_set_bg_rgb8(stdplane, popup_style.bg.r, popup_style.bg.g, popup_style.bg.b);
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
+}
+
 void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
     struct Slot {
         std::string key;
@@ -302,7 +421,7 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
         {"F3", "Next Hunk"},
         {"F4", "Hunk Popup"},
         {"F5", "Hunk Diff"},
-        {"F6", "--"}
+        {"F6", "Theme"}
     };
 
     std::vector<Slot> row2 = {

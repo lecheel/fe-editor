@@ -107,6 +107,9 @@ void VimEngine::render() {
         if (!git_stash_action_active) {
             notcurses_cursor_disable(nc);
         }
+    } else if (show_theme_popup) {
+        render_theme_popup(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
     } else if (show_mini_help) {
         render_mini_help(screen_h, screen_w);
         notcurses_cursor_disable(nc);

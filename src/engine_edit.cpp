@@ -284,6 +284,13 @@ void ActionRegistry::init_default_actions() {
         }
     );
 
+    register_action("theme_select", {"theme_popup", "themes"}, "View", "Open theme selection popup (F6)",
+        [](ActionContext& ctx) {
+            ctx.engine.open_theme_popup();
+            return true;
+        }
+    );
+
     register_action("ws_list", {"ws", "workspaces", "workspace"}, "Workspace", "Open workspace slots list (Alt-0 / :ws)",
         [](ActionContext& ctx) {
             ctx.engine.open_workspace_list();
@@ -741,7 +748,7 @@ REGISTER_COMMAND(
     "Set or show editor theme (:theme [name])",
     [](CommandContext& ctx) {
         if (ctx.argv.empty()) {
-            ctx.engine.set_info_msg("Current theme: " + HelixTheme::instance().get_name());
+            ctx.engine.open_theme_popup();
             return;
         }
         std::string name = ctx.argv[0];
@@ -903,6 +910,20 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
     }
     if (show_hunk_diff) {
         handle_hunk_diff_input(ni, key);
+        return;
+    }
+
+    // 3b. Theme selection popup (F6)
+    if (is_fkey(ni, key, 6)) {
+        if (show_theme_popup) {
+            close_theme_popup();
+        } else {
+            open_theme_popup();
+        }
+        return;
+    }
+    if (show_theme_popup) {
+        handle_theme_popup_input(ni, key);
         return;
     }
 
@@ -4794,6 +4815,123 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         win.deduplicate_cursors();
         update_autocomplete_after_edit();
+    }
+}
+
+void VimEngine::scan_themes() {
+    theme_list.clear();
+    std::set<std::string> found;
+
+    std::vector<std::string> dirs = {
+        "themes",
+        "./themes",
+        (fs::path(config.get_config_dir()) / "themes").string()
+    };
+    const char* home = std::getenv("HOME");
+    if (home) {
+        dirs.push_back(std::string(home) + "/.config/fe/themes");
+        dirs.push_back(std::string(home) + "/.local/share/fe/runtime/themes");
+    }
+    dirs.push_back("/usr/lib/fe/runtime/themes");
+    dirs.push_back("/usr/share/fe/runtime/themes");
+
+    for (const auto& d : dirs) {
+        std::error_code ec;
+        if (!fs::exists(d, ec) || !fs::is_directory(d, ec)) continue;
+        for (const auto& entry : fs::directory_iterator(d, fs::directory_options::skip_permission_denied, ec)) {
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".toml") {
+                found.insert(entry.path().stem().string());
+            }
+        }
+    }
+
+    found.insert("dark_plus");
+    theme_list.assign(found.begin(), found.end());
+}
+
+void VimEngine::open_theme_popup() {
+    show_filepicker = false;
+    show_settings_popup = false;
+    show_git_hunk_popup = false;
+    show_whichkey_popup = false;
+    show_buffer_list = false;
+    show_rg_popup = false;
+    show_hunk_diff = false;
+    show_git_status = false;
+    show_workspace_list = false;
+    close_cmd_completion();
+    leader_pending = false;
+
+    scan_themes();
+    theme_selected_idx = 0;
+    std::string cur_name = config.settings.theme.empty() ? "dark_plus" : config.settings.theme;
+    for (size_t i = 0; i < theme_list.size(); ++i) {
+        if (theme_list[i] == cur_name) {
+            theme_selected_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    theme_scroll = 0;
+    show_theme_popup = true;
+    set_info_msg("Themes (F6 / :theme): [▲/▼] Navigate  [Enter] Select  [Esc/F6] Close");
+}
+
+void VimEngine::close_theme_popup() {
+    show_theme_popup = false;
+    set_info_msg("");
+}
+
+void VimEngine::handle_theme_popup_input(const ncinput& ni, uint32_t key) {
+    if (is_esc(ni, key) || is_fkey(ni, key, 6) || key == 'q' || key == 'Q') {
+        close_theme_popup();
+        return;
+    }
+
+    if (theme_list.empty()) {
+        close_theme_popup();
+        return;
+    }
+
+    int total = static_cast<int>(theme_list.size());
+
+    if (key == NCKEY_UP || key == 'k' || key == 'K' || is_ctrl(ni, key, 'p')) {
+        theme_selected_idx = (theme_selected_idx + total - 1) % total;
+        return;
+    }
+
+    if (key == NCKEY_DOWN || key == 'j' || key == 'J' || is_ctrl(ni, key, 'n')) {
+        theme_selected_idx = (theme_selected_idx + 1) % total;
+        return;
+    }
+
+    if (key == NCKEY_HOME || key == 'g') {
+        theme_selected_idx = 0;
+        return;
+    }
+
+    if (key == NCKEY_END || key == 'G') {
+        theme_selected_idx = total - 1;
+        return;
+    }
+
+    if (is_enter(ni, key) || key == ' ') {
+        if (theme_selected_idx >= 0 && theme_selected_idx < total) {
+            std::string chosen = theme_list[theme_selected_idx];
+            if (HelixTheme::instance().load_theme(chosen, config.get_config_dir())) {
+                config.settings.theme = chosen;
+                config.save();
+                for (auto& b : buffers) {
+                    if (b->syntax) {
+                        b->syntax->update_text(b->lines);
+                    }
+                }
+                close_theme_popup();
+                set_info_msg("Theme set to: " + chosen);
+            } else {
+                set_info_msg("Could not load theme: " + chosen);
+            }
+        }
+        return;
     }
 }
 

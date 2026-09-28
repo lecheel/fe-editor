@@ -55,6 +55,12 @@ private:
     int next_win_id{2};
     bool show_settings_popup{false};
 
+    // F6 Theme selection popup state
+    bool show_theme_popup{false};
+    std::vector<std::string> theme_list;
+    int theme_selected_idx{0};
+    int theme_scroll{0};
+
     // Workspace Slots (0..4) state
     bool show_workspace_list{false};
     int workspace_cursor{0};
@@ -268,6 +274,12 @@ public:
 
     void handle_settings_popup(const ncinput& ni, uint32_t key);
     void render_settings_popup(unsigned int screen_h, unsigned int screen_w);
+
+    void open_theme_popup();
+    void close_theme_popup();
+    void scan_themes();
+    void handle_theme_popup_input(const ncinput& ni, uint32_t key);
+    void render_theme_popup(unsigned int screen_h, unsigned int screen_w);
 
     void open_workspace_list();
     void close_workspace_list();
