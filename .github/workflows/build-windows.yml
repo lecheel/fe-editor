@@ -40,14 +40,20 @@ jobs:
       - name: Copy DLLs to Build Folder
         run: cp /mingw64/bin/*.dll build/
 
+      - name: Package Windows Zip
+        run: |
+          mkdir -p dist/fe
+          cp build/fe.exe dist/fe/
+          cp build/*.dll dist/fe/
+          cd dist
+          cmake -E tar cf ../fe-windows.zip --format=zip fe
+
       # 1. Upload as an Artifact (for normal branch pushes / PRs)
-      - name: Upload Windows Executable as Artifact
+      - name: Upload Windows Package as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fe-windows-exe
-          path: |
-            build/fe.exe
-            build/*.dll
+          name: fe-windows
+          path: fe-windows.zip
           retention-days: 14
 
       # 2. Create an Official GitHub Release (ONLY when a tag is pushed)
@@ -57,6 +63,4 @@ jobs:
         with:
           name: Release ${{ github.ref_name }}
           body: "Automated Windows build for ${{ github.ref_name }}. Extract the zip and run fe.exe."
-          files: |
-            build/fe.exe
-            build/*.dll
+          files: fe-windows.zip
