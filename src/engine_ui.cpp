@@ -13,7 +13,7 @@ extern int g_hunk_marker_style;
 namespace fs = std::filesystem;
 
 void VimEngine::render_workspace_list(unsigned int screen_h, unsigned int screen_w) {
-    int popup_w = std::max(56, static_cast<int>(screen_w * 0.50));
+    int popup_w = std::max(56, static_cast<int>(screen_w * 0.70));
     popup_w = std::min(popup_w, static_cast<int>(screen_w) - 4);
     int popup_h = 10;
     int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
@@ -44,7 +44,7 @@ void VimEngine::render_workspace_list(unsigned int screen_h, unsigned int screen
     ncplane_putstr_yx(stdplane, popup_y + 2, popup_x, "├");
     ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + popup_w - 1, "┤");
 
-    std::string title = " Workspaces (Alt-W / :ws) ";
+    std::string title = " Workspaces (Alt-0 / :ws) ";
     ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 

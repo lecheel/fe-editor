@@ -94,6 +94,7 @@ void KeymapConfig::load(const std::string& config_dir) {
                     << "    \"<Space>g\": \"ripgrep\",\n"
                     << "    \"<Space>d\": \"hunk_diff\",\n"
                     << "    \"<Space>u\": \"undo\",\n"
+                    << "    \"<A-0>\": \"ws_list\",\n"
                     << "    \"H\": \"0\",\n"
                     << "    \"L\": \"$\"\n"
                     << "  },\n"
@@ -283,7 +284,7 @@ void ActionRegistry::init_default_actions() {
         }
     );
 
-    register_action("ws_list", {"ws", "workspaces", "workspace"}, "Workspace", "Open workspace slots list (Alt-W)",
+    register_action("ws_list", {"ws", "workspaces", "workspace"}, "Workspace", "Open workspace slots list (Alt-0 / :ws)",
         [](ActionContext& ctx) {
             ctx.engine.open_workspace_list();
             return true;
@@ -758,17 +759,10 @@ bool VimEngine::handle_global_shortcuts(const ncinput& ni, uint32_t key) {
         return true;
     }
 
-    // Alt+0..4 directly loads workspace slots 0..4
+    // Alt-0 (or Alt-W) opens workspace slots popup (:ws)
     if (ni.alt && !ni.ctrl) {
-        uint32_t base_k = (key >= '0' && key <= '4') ? key : ni.id;
-        if (base_k >= '0' && base_k <= '4') {
-            int slot = static_cast<int>(base_k - '0');
-            if (!load_workspace(slot)) {
-                set_info_msg("Workspace " + std::to_string(slot) + " is empty");
-            }
-            return true;
-        }
-        if (base_k == 'W' || (ni.shift && (base_k == 'w' || key == 'w'))) {
+        uint32_t base_k = (key >= 32 && key < 127) ? key : ni.id;
+        if (base_k == '0' || base_k == 'W' || (ni.shift && (base_k == 'w' || key == 'w'))) {
             open_workspace_list();
             return true;
         }
@@ -4796,7 +4790,7 @@ void VimEngine::open_workspace_list() {
     workspace_edit_draft.clear();
     workspace_status_msg.clear();
     show_workspace_list = true;
-    set_info_msg("Workspaces: [Enter] Load  [s] Save  [c] Clear  [d] Delete  [e] Name");
+    set_info_msg("Workspaces (Alt-0 / :ws): [Enter] Load  [s] Save  [c] Clear  [d] Delete  [e] Name");
 }
 
 void VimEngine::close_workspace_list() {
