@@ -250,7 +250,7 @@ static std::string exec_git_cmd(const std::string& repo_root, const std::string&
 }
 
 static int run_git_cmd_status(const std::string& repo_root, const std::string& git_args) {
-    std::string cmd = "git -C \"" + repo_root + "\" " + git_args + " 2>/dev/null";
+    std::string cmd = "git -C \"" + repo_root + "\" " + git_args + " >/dev/null 2>&1";
     int res = system(cmd.c_str());
     return res;
 }
@@ -409,17 +409,17 @@ bool git_stage_file(const std::string& repo_root, const std::string& rel_path) {
 }
 
 bool git_unstage_file(const std::string& repo_root, const std::string& rel_path) {
-    std::string cmd = "reset HEAD -- \"" + rel_path + "\"";
+    std::string cmd = "reset -q HEAD -- \"" + rel_path + "\"";
     int res = run_git_cmd_status(repo_root, cmd);
     if (res != 0) {
-        cmd = "rm --cached -- \"" + rel_path + "\"";
+        cmd = "rm --cached -q -- \"" + rel_path + "\"";
         res = run_git_cmd_status(repo_root, cmd);
     }
     return res == 0;
 }
 
 bool git_checkout_branch(const std::string& repo_root, const std::string& branch_name) {
-    std::string cmd = "checkout \"" + branch_name + "\"";
+    std::string cmd = "checkout -q \"" + branch_name + "\"";
     return run_git_cmd_status(repo_root, cmd) == 0;
 }
 

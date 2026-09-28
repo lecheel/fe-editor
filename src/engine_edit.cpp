@@ -1047,7 +1047,6 @@ void VimEngine::handle_git_status_input(const ncinput& ni, uint32_t key) {
             git_stash_status_msg.clear();
             refresh_git_status();
             git_status_msg = res.summary;
-            set_info_msg(res.summary);
             return;
         }
 
@@ -1057,7 +1056,6 @@ void VimEngine::handle_git_status_input(const ncinput& ni, uint32_t key) {
             git_stash_status_msg.clear();
             refresh_git_status();
             git_status_msg = res.summary;
-            set_info_msg(res.summary);
             return;
         }
         return;
@@ -1136,7 +1134,6 @@ void VimEngine::handle_git_status_input(const ncinput& ni, uint32_t key) {
         auto res = git_stash_push_info(root);
         refresh_git_status();
         git_status_msg = res.summary;
-        set_info_msg(res.summary);
         return;
     }
 

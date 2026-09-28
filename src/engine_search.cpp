@@ -324,6 +324,7 @@ void VimEngine::open_git_status() {
     git_status_msg.clear();
     git_stash_action_active = false;
     git_stash_status_msg.clear();
+    set_info_msg("");
     refresh_git_status();
 }
 
