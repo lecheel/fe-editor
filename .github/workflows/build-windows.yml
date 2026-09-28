@@ -3,6 +3,7 @@ name: Windows Build
 on:
   push:
     branches: [ "main", "master" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main", "master" ]
 
@@ -11,7 +12,7 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        shell: msys2 {0} # Tells GH Actions to run commands inside the MSYS2 environment
+        shell: msys2 {0}
         
     steps:
       - name: Checkout Code
@@ -20,8 +21,8 @@ jobs:
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64       # Use the 64-bit MinGW environment
-          update: true           # Update package databases
+          msystem: MINGW64
+          update: true
           install: >-
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
@@ -31,20 +32,31 @@ jobs:
             mingw-w64-x86_64-libgit2
 
       - name: Configure CMake
-        # Changed from "MinGW Makefiles" to "Ninja"
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Project
         run: cmake --build build
 
-      # MSYS2 builds are dynamically linked by default. 
-      # We must copy the required .dll files next to the .exe so it runs on standard Windows.
       - name: Copy DLLs to Build Folder
         run: cp /mingw64/bin/*.dll build/
 
-      - name: Upload Windows Executable
+      # 1. Upload as an Artifact (for normal branch pushes / PRs)
+      - name: Upload Windows Executable as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: fe-windows-exe
           path: |
-            build/
+            build/fe.exe
+            build/*.dll
+          retention-days: 14
+
+      # 2. Create an Official GitHub Release (ONLY when a tag is pushed)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          body: "Automated Windows build for ${{ github.ref_name }}. Extract the zip and run fe.exe."
+          files: |
+            build/fe.exe
+            build/*.dll

@@ -7,7 +7,9 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -443,11 +445,15 @@ static GitCommandResult exec_git_capture(const std::string& repo_root, const std
         }
     }
     int status = pclose(fp);
+#ifdef _WIN32
+    res.exit_code = status;
+#else
     if (WIFEXITED(status)) {
         res.exit_code = WEXITSTATUS(status);
     } else {
         res.exit_code = status;
     }
+#endif
     res.success = (res.exit_code == 0);
     return res;
 }

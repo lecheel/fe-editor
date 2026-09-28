@@ -385,7 +385,7 @@ int VimEngine::get_line_num_w(const TextBuffer& buf) const {
     if (config.settings.line_number_width > 0) {
         return std::max(4, config.settings.line_number_width);
     }
-    int digits = static_cast<int>(std::to_string(std::max(1UL, buf.lines.size())).size());
+    int digits = static_cast<int>(std::to_string(std::max<size_t>(1, buf.lines.size())).size());
     return std::max(4, digits + 2);
 }
 
