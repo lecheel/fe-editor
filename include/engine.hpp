@@ -208,6 +208,8 @@ private:
     int get_line_num_w(const TextBuffer& buf) const;
 public:
     ConfigManager& get_config() { return config; }
+    std::vector<std::shared_ptr<TextBuffer>>& get_buffers() { return buffers; }
+    const std::vector<std::shared_ptr<TextBuffer>>& get_buffers() const { return buffers; }
     void set_info_msg(std::string msg);
     Window& active_win();
     TextBuffer& active_buf();

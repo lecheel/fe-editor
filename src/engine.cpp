@@ -174,6 +174,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
 
     config.load();
     keymap.load(config.get_config_dir());
+    HelixTheme::instance().load_theme(config.settings.theme.empty() ? "dark_plus" : config.settings.theme, config.get_config_dir());
 
     bool delta_mode = false;
     bool no_ws = false;

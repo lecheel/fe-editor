@@ -866,12 +866,18 @@ void VimEngine::render_window(Window& win, bool is_active) {
         int line_idx = win.scroll_y + r;
         int draw_y = win.y + r;
 
+        auto& theme = HelixTheme::instance();
+        auto ui_bg = theme.get_ui_style("ui.background", {{212, 212, 212}, {30, 30, 30}, true, true});
+        auto ui_cursorline = theme.get_ui_style("ui.cursorline.primary", {{}, {40, 40, 40}, false, true});
+        auto ui_linenr = theme.get_ui_style("ui.linenr", {{133, 133, 133}, {30, 30, 30}, true, true});
+        auto ui_linenr_sel = theme.get_ui_style("ui.linenr.selected", {{198, 198, 198}, {40, 40, 40}, true, true});
+
         if (gutter_w > 0) {
             bool is_cursor_line = (line_idx == primary.y);
             if (is_cursor_line && config.settings.highlight_current_line && is_active) {
-                ncplane_set_bg_rgb8(stdplane, 35, 38, 48);
+                ncplane_set_bg_rgb8(stdplane, ui_cursorline.bg.r, ui_cursorline.bg.g, ui_cursorline.bg.b);
             } else {
-                ncplane_set_bg_rgb8(stdplane, 22, 22, 26);
+                ncplane_set_bg_rgb8(stdplane, ui_bg.bg.r, ui_bg.bg.g, ui_bg.bg.b);
             }
 
             // Determine git hunk gutter sign (~, +, -)
@@ -899,12 +905,16 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 }
             }
 
+            auto plus_col = theme.get_color("dark_green2", {72, 126, 2});
+            auto min_col  = theme.get_color("orange_red", {241, 76, 76});
+            auto mod_col  = theme.get_color("blue2", {86, 156, 214});
+
             if (config.settings.show_line_numbers) {
                 if (line_idx < static_cast<int>(buf.lines.size())) {
                     if (is_cursor_line && config.settings.highlight_current_line && is_active) {
-                        ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+                        ncplane_set_fg_rgb8(stdplane, ui_linenr_sel.fg.r, ui_linenr_sel.fg.g, ui_linenr_sel.fg.b);
                     } else if (is_active) {
-                        ncplane_set_fg_rgb8(stdplane, 80, 160, 200);
+                        ncplane_set_fg_rgb8(stdplane, ui_linenr.fg.r, ui_linenr.fg.g, ui_linenr.fg.b);
                     } else {
                         ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
                     }
@@ -920,11 +930,11 @@ void VimEngine::render_window(Window& win, bool is_active) {
 
                     // Print git sign column
                     if (git_sign == '+') {
-                        ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+                        ncplane_set_fg_rgb8(stdplane, plus_col.r, plus_col.g, plus_col.b);
                     } else if (git_sign == '~') {
-                        ncplane_set_fg_rgb8(stdplane, 80, 180, 240);
+                        ncplane_set_fg_rgb8(stdplane, mod_col.r, mod_col.g, mod_col.b);
                     } else if (git_sign == '-') {
-                        ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
+                        ncplane_set_fg_rgb8(stdplane, min_col.r, min_col.g, min_col.b);
                     } else {
                         ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
                     }
@@ -940,11 +950,11 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 }
             } else {
                 if (git_sign == '+') {
-                    ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+                    ncplane_set_fg_rgb8(stdplane, plus_col.r, plus_col.g, plus_col.b);
                 } else if (git_sign == '~') {
-                    ncplane_set_fg_rgb8(stdplane, 80, 180, 240);
+                    ncplane_set_fg_rgb8(stdplane, mod_col.r, mod_col.g, mod_col.b);
                 } else if (git_sign == '-') {
-                    ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
+                    ncplane_set_fg_rgb8(stdplane, min_col.r, min_col.g, min_col.b);
                 } else {
                     ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
                 }
@@ -970,7 +980,10 @@ void VimEngine::render_window(Window& win, bool is_active) {
             }
             int ghost_len = static_cast<int>(ghost_str.size());
 
-            ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
+            auto ui_cursor = theme.get_ui_style("ui.cursor", {{0, 0, 0}, {166, 166, 166}, true, true});
+            auto ui_sel = theme.get_ui_style("ui.selection.primary", {{255, 255, 255}, {38, 79, 120}, true, true});
+
+            ncplane_set_bg_rgb8(stdplane, ui_bg.bg.r, ui_bg.bg.g, ui_bg.bg.b);
             for (int c = 0; c < text_avail_w; ++c) {
                 ncplane_putchar_yx(stdplane, draw_y, win.x + gutter_w + c, ' ');
             }
@@ -1017,18 +1030,18 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     int draw_x = win.x + gutter_w + screen_col;
 
                     if (has_cursor) {
-                        ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
-                        ncplane_set_bg_rgb8(stdplane, 255, 180, 50);
+                        ncplane_set_fg_rgb8(stdplane, ui_cursor.fg.r, ui_cursor.fg.g, ui_cursor.fg.b);
+                        ncplane_set_bg_rgb8(stdplane, ui_cursor.bg.r, ui_cursor.bg.g, ui_cursor.bg.b);
                     } else if (in_visual) {
-                        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-                        ncplane_set_bg_rgb8(stdplane, 55, 75, 135);
+                        ncplane_set_fg_rgb8(stdplane, ui_sel.fg.r, ui_sel.fg.g, ui_sel.fg.b);
+                        ncplane_set_bg_rgb8(stdplane, ui_sel.bg.r, ui_sel.bg.g, ui_sel.bg.b);
                     } else {
                         if (byte_idx < syn_styles.size()) {
                             ncplane_set_fg_rgb8(stdplane, syn_styles[byte_idx].r, syn_styles[byte_idx].g, syn_styles[byte_idx].b);
                         } else {
-                            ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
+                            ncplane_set_fg_rgb8(stdplane, ui_bg.fg.r, ui_bg.fg.g, ui_bg.fg.b);
                         }
-                        ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
+                        ncplane_set_bg_rgb8(stdplane, ui_bg.bg.r, ui_bg.bg.g, ui_bg.bg.b);
                     }
 
                     ncplane_putstr_yx(stdplane, draw_y, draw_x, glyph.c_str());
@@ -1060,12 +1073,12 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 }
 
                 if (has_cursor) {
-                    ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
-                    ncplane_set_bg_rgb8(stdplane, 255, 180, 50);
+                    ncplane_set_fg_rgb8(stdplane, ui_cursor.fg.r, ui_cursor.fg.g, ui_cursor.fg.b);
+                    ncplane_set_bg_rgb8(stdplane, ui_cursor.bg.r, ui_cursor.bg.g, ui_cursor.bg.b);
                     ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
                 } else if (in_visual) {
-                    ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-                    ncplane_set_bg_rgb8(stdplane, 55, 75, 135);
+                    ncplane_set_fg_rgb8(stdplane, ui_sel.fg.r, ui_sel.fg.g, ui_sel.fg.b);
+                    ncplane_set_bg_rgb8(stdplane, ui_sel.bg.r, ui_sel.bg.g, ui_sel.bg.b);
                     ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
                 }
             }
@@ -1086,7 +1099,7 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 }
             }
         } else {
-            ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
+            ncplane_set_bg_rgb8(stdplane, ui_bg.bg.r, ui_bg.bg.g, ui_bg.bg.b);
             std::string empty(text_avail_w, ' ');
             ncplane_putstr_yx(stdplane, draw_y, win.x + gutter_w, empty.c_str());
         }
@@ -1197,8 +1210,16 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
     auto& buf = active_buf();
     Cursor primary = win.cursors.empty() ? Cursor{0, 0} : win.cursors.front();
 
+    auto& theme = HelixTheme::instance();
+    auto status_fill = theme.get_ui_style("ui.statusline.powerline.fill", {{}, {0, 122, 204}, false, true});
+    auto status_ws   = theme.get_ui_style("ui.statusline.powerline.ws", {{212, 212, 212}, {38, 79, 120}, true, true});
+    auto status_br   = theme.get_ui_style("ui.statusline.powerline.branch", {{255, 255, 255}, {9, 71, 113}, true, true});
+    auto status_file = theme.get_ui_style("ui.statusline.powerline.file", {{238, 238, 238}, {38, 79, 120}, true, true});
+    auto status_pos  = theme.get_ui_style("ui.statusline.powerline.pos", {{255, 255, 255}, {0, 43, 80}, true, true});
+    auto status_lang = theme.get_ui_style("ui.statusline.powerline.lang", {{255, 255, 255}, {9, 71, 113}, true, true});
+
     // Clear entire status line background
-    ncplane_set_bg_rgb8(stdplane, 22, 24, 30);
+    ncplane_set_bg_rgb8(stdplane, status_fill.bg.r, status_fill.bg.g, status_fill.bg.b);
     for (unsigned int c = 0; c < screen_w; ++c) {
         ncplane_putchar_yx(stdplane, y, c, ' ');
     }
@@ -1207,46 +1228,43 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
 
     // --- Left Segment 0: [Workspace Slot or FE] ---
     std::string ws_label;
-    uint8_t ws_r, ws_g, ws_b;
     if (workspace_active && workspace_slot >= 0 && workspace_slot < 5) {
         ws_label = " WS" + std::to_string(workspace_slot) + " ";
-        ws_r = 135; ws_g = 65; ws_b = 205;
     } else {
         ws_label = " FE ";
-        ws_r = 45; ws_g = 50; ws_b = 62;
     }
-    ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-    ncplane_set_bg_rgb8(stdplane, ws_r, ws_g, ws_b);
+    ncplane_set_fg_rgb8(stdplane, status_ws.fg.r, status_ws.fg.g, status_ws.fg.b);
+    ncplane_set_bg_rgb8(stdplane, status_ws.bg.r, status_ws.bg.g, status_ws.bg.b);
     ncplane_putstr_yx(stdplane, y, cur_x, ws_label.c_str());
     cur_x += static_cast<int>(ws_label.size());
 
     // --- Left Segment 1: [mode] ---
     std::string mode_str = " NORMAL ";
-    uint8_t m_r = 80, m_g = 210, m_b = 120;
+    UIStyle m_style = theme.get_ui_style("ui.statusline.powerline.normal", {{255, 255, 255}, {0, 43, 80}, true, true});
     switch (mode) {
         case Mode::NORMAL:
             mode_str = " NORMAL ";
-            m_r = 80; m_g = 210; m_b = 120;
+            m_style = theme.get_ui_style("ui.statusline.powerline.normal", {{255, 255, 255}, {0, 43, 80}, true, true});
             break;
         case Mode::INSERT:
             mode_str = " INSERT ";
-            m_r = 80; m_g = 170; m_b = 255;
+            m_style = theme.get_ui_style("ui.statusline.powerline.insert", {{255, 255, 255}, {72, 126, 2}, true, true});
             break;
         case Mode::VISUAL:
             mode_str = " VISUAL ";
-            m_r = 230; m_g = 140; m_b = 60;
+            m_style = theme.get_ui_style("ui.statusline.powerline.visual", {{255, 255, 255}, {197, 134, 192}, true, true});
             break;
         case Mode::VISUAL_BLOCK:
             mode_str = " V-BLOCK ";
-            m_r = 200; m_g = 100; m_b = 255;
+            m_style = theme.get_ui_style("ui.statusline.powerline.visual", {{255, 255, 255}, {197, 134, 192}, true, true});
             break;
         case Mode::COMMAND:
             mode_str = " COMMAND ";
-            m_r = 240; m_g = 200; m_b = 80;
+            m_style = UIStyle{{15, 15, 15}, {240, 200, 80}, true, true};
             break;
     }
-    ncplane_set_fg_rgb8(stdplane, 15, 15, 15);
-    ncplane_set_bg_rgb8(stdplane, m_r, m_g, m_b);
+    ncplane_set_fg_rgb8(stdplane, m_style.fg.r, m_style.fg.g, m_style.fg.b);
+    ncplane_set_bg_rgb8(stdplane, m_style.bg.r, m_style.bg.g, m_style.bg.b);
     ncplane_putstr_yx(stdplane, y, cur_x, mode_str.c_str());
     cur_x += static_cast<int>(mode_str.size());
 
@@ -1263,8 +1281,8 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
         std::string git_seg = "  " + branch_name + " +" + std::to_string(add_cnt) +
                               " ~" + std::to_string(mod_cnt) + " -" + std::to_string(del_cnt) + " ";
 
-        ncplane_set_fg_rgb8(stdplane, 225, 230, 240);
-        ncplane_set_bg_rgb8(stdplane, 45, 52, 68);
+        ncplane_set_fg_rgb8(stdplane, status_br.fg.r, status_br.fg.g, status_br.fg.b);
+        ncplane_set_bg_rgb8(stdplane, status_br.bg.r, status_br.bg.g, status_br.bg.b);
         ncplane_putstr_yx(stdplane, y, cur_x, git_seg.c_str());
         cur_x += static_cast<int>(git_seg.size()) - 2;
 
@@ -1286,8 +1304,8 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
         }
 
         std::string file_seg = " " + display_name + (buf.modified ? " [+] " : " ");
-        ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
-        ncplane_set_bg_rgb8(stdplane, 32, 36, 46);
+        ncplane_set_fg_rgb8(stdplane, status_file.fg.r, status_file.fg.g, status_file.fg.b);
+        ncplane_set_bg_rgb8(stdplane, status_file.bg.r, status_file.bg.g, status_file.bg.b);
         ncplane_putstr_yx(stdplane, y, cur_x, file_seg.c_str());
         cur_x += static_cast<int>(file_seg.size());
     }
@@ -1303,20 +1321,20 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
 
     if (rx < static_cast<int>(screen_w)) {
         // [filetype]
-        ncplane_set_fg_rgb8(stdplane, 130, 200, 255);
-        ncplane_set_bg_rgb8(stdplane, 40, 45, 58);
+        ncplane_set_fg_rgb8(stdplane, status_lang.fg.r, status_lang.fg.g, status_lang.fg.b);
+        ncplane_set_bg_rgb8(stdplane, status_lang.bg.r, status_lang.bg.g, status_lang.bg.b);
         ncplane_putstr_yx(stdplane, y, rx, ft_seg.c_str());
         rx += static_cast<int>(ft_seg.size());
 
         // [row:col]
-        ncplane_set_fg_rgb8(stdplane, 240, 245, 255);
-        ncplane_set_bg_rgb8(stdplane, 52, 60, 75);
+        ncplane_set_fg_rgb8(stdplane, status_pos.fg.r, status_pos.fg.g, status_pos.fg.b);
+        ncplane_set_bg_rgb8(stdplane, status_pos.bg.r, status_pos.bg.g, status_pos.bg.b);
         ncplane_putstr_yx(stdplane, y, rx, pos_seg.c_str());
         rx += static_cast<int>(pos_seg.size());
 
         // [buffer 1/2]
         ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-        ncplane_set_bg_rgb8(stdplane, 68, 78, 98);
+        ncplane_set_bg_rgb8(stdplane, status_fill.bg.r, status_fill.bg.g, status_fill.bg.b);
         ncplane_putstr_yx(stdplane, y, rx, buf_seg.c_str());
     }
 }

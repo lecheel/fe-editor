@@ -238,57 +238,150 @@ void* load_lang_parser(const std::string& lang) {
 
 } // namespace
 
+static ColorRGB parse_hex_color(const std::string& hex) {
+    if (hex.size() >= 7 && hex[0] == '#') {
+        unsigned int r = 0, g = 0, b = 0;
+        if (sscanf(hex.c_str() + 1, "%02x%02x%02x", &r, &g, &b) == 3) {
+            return ColorRGB{static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b)};
+        }
+    }
+    return ColorRGB{212, 212, 212};
+}
+
+HelixTheme& HelixTheme::instance() {
+    static HelixTheme s_theme;
+    return s_theme;
+}
+
 HelixTheme::HelixTheme() {
-    // Helix theme capture mappings with standard theme colors
-    styles["keyword"]                     = {255, 110, 145};
-    styles["keyword.control"]             = {255, 105, 140};
-    styles["keyword.control.conditional"] = {255, 115, 150};
-    styles["keyword.control.repeat"]      = {255, 125, 160};
-    styles["keyword.control.return"]      = {255, 95, 130};
-    styles["keyword.control.import"]      = {255, 140, 180};
-    styles["keyword.function"]            = {100, 180, 245};
-    styles["keyword.storage"]             = {100, 190, 240};
-    styles["keyword.storage.type"]        = {100, 200, 240};
-    styles["keyword.directive"]           = {225, 150, 255};
+    init_defaults();
+}
 
-    styles["function"]                    = {130, 185, 255};
-    styles["function.builtin"]            = {110, 210, 255};
-    styles["function.method"]             = {140, 190, 255};
-    styles["function.macro"]              = {230, 160, 255};
-    styles["function.special"]            = {240, 170, 255};
+void HelixTheme::init_defaults() {
+    palette["white"] = {255, 255, 255};
+    palette["search_match"] = {81, 92, 107};
+    palette["search_match_active"] = {101, 77, 46};
+    palette["orange"] = {206, 145, 120};
+    palette["gold"] = {215, 186, 125};
+    palette["pale_green"] = {181, 206, 168};
+    palette["dark_green"] = {106, 153, 85};
+    palette["dark_green2"] = {72, 126, 2};
+    palette["light_gray"] = {212, 212, 212};
+    palette["light_gray2"] = {198, 198, 198};
+    palette["light_gray3"] = {238, 238, 238};
+    palette["dark_gray"] = {133, 133, 133};
+    palette["dark_gray2"] = {30, 30, 30};
+    palette["dark_gray3"] = {40, 40, 40};
+    palette["dark_gray4"] = {64, 64, 64};
+    palette["dark_gray5"] = {139, 148, 158};
+    palette["blue"] = {0, 122, 204};
+    palette["blue2"] = {86, 156, 214};
+    palette["blue3"] = {103, 150, 230};
+    palette["blue4"] = {27, 129, 168};
+    palette["light_blue"] = {117, 190, 255};
+    palette["dark_blue"] = {38, 79, 120};
+    palette["dark_blue2"] = {9, 71, 113};
+    palette["red"] = {255, 18, 18};
+    palette["orange_red"] = {241, 76, 76};
+    palette["hunk_add_bg"] = {32, 58, 32};
+    palette["hunk_del_bg"] = {58, 32, 32};
+    palette["type"] = {78, 201, 176};
+    palette["special"] = {197, 134, 192};
+    palette["variable"] = {156, 220, 254};
+    palette["fn_declaration"] = {220, 220, 170};
+    palette["constant"] = {79, 193, 255};
+    palette["background"] = {30, 30, 30};
+    palette["text"] = {212, 212, 212};
+    palette["cursor"] = {166, 166, 166};
+    palette["widget"] = {37, 37, 38};
+    palette["borders"] = {50, 50, 50};
+    palette["navy"] = {0, 43, 80};
 
-    styles["type"]                        = {245, 200, 100};
-    styles["type.builtin"]                = {235, 180, 80};
-    styles["type.enum.variant"]           = {240, 160, 120};
+    // Syntax defaults matching dark_plus.toml
+    styles["comment"]                     = palette["dark_green"];
+    styles["comment.line"]                = palette["dark_green"];
+    styles["comment.block"]               = palette["dark_green"];
+    styles["constant"]                    = palette["constant"];
+    styles["constant.builtin"]            = palette["blue2"];
+    styles["constant.character"]          = palette["orange"];
+    styles["constant.character.escape"]   = palette["gold"];
+    styles["constant.numeric"]            = palette["pale_green"];
+    styles["constructor"]                 = palette["type"];
+    styles["function"]                    = palette["fn_declaration"];
+    styles["function.builtin"]            = palette["fn_declaration"];
+    styles["function.macro"]              = palette["blue2"];
+    styles["function.method"]             = palette["fn_declaration"];
+    styles["keyword"]                     = palette["blue2"];
+    styles["keyword.control"]             = palette["special"];
+    styles["keyword.control.conditional"] = palette["special"];
+    styles["keyword.control.repeat"]      = palette["special"];
+    styles["keyword.control.return"]      = palette["special"];
+    styles["keyword.control.import"]      = palette["special"];
+    styles["keyword.directive"]           = palette["special"];
+    styles["keyword.function"]            = palette["blue2"];
+    styles["keyword.storage"]             = palette["blue2"];
+    styles["keyword.storage.type"]        = palette["blue2"];
+    styles["label"]                       = palette["blue2"];
+    styles["namespace"]                   = palette["type"];
+    styles["operator"]                    = palette["text"];
+    styles["punctuation"]                 = palette["text"];
+    styles["punctuation.delimiter"]       = palette["text"];
+    styles["punctuation.bracket"]         = palette["text"];
+    styles["special"]                     = palette["light_blue"];
+    styles["string"]                      = palette["orange"];
+    styles["string.regexp"]               = palette["gold"];
+    styles["type"]                        = palette["type"];
+    styles["type.builtin"]                = palette["type"];
+    styles["type.enum.variant"]           = palette["constant"];
+    styles["variable"]                    = palette["variable"];
+    styles["variable.builtin"]            = palette["blue2"];
+    styles["variable.other.member"]       = palette["variable"];
+    styles["variable.parameter"]          = palette["variable"];
+    styles["diff.plus"]                   = palette["dark_green2"];
+    styles["diff.minus"]                  = palette["orange_red"];
 
-    styles["variable"]                    = {220, 225, 235};
-    styles["variable.parameter"]          = {245, 165, 110};
-    styles["variable.builtin"]            = {255, 135, 135};
-    styles["variable.other.member"]       = {170, 215, 230};
+    // UI defaults matching dark_plus.toml
+    ui_styles["ui.background"]            = {palette["light_gray"], palette["dark_gray2"], true, true};
+    ui_styles["ui.window"]                = {{}, palette["widget"], false, true};
+    ui_styles["ui.popup"]                 = {palette["text"], palette["widget"], true, true};
+    ui_styles["ui.popup.title"]           = {palette["gold"], {}, true, false};
+    ui_styles["ui.cursor"]                = {{0, 0, 0}, palette["cursor"], true, true};
+    ui_styles["ui.cursor.primary"]        = {palette["cursor"], {}, true, false};
+    ui_styles["ui.selection.primary"]     = {{255, 255, 255}, palette["dark_blue"], true, true};
+    ui_styles["ui.linenr"]                = {palette["dark_gray"], palette["dark_gray2"], true, true};
+    ui_styles["ui.linenr.selected"]       = {palette["light_gray2"], palette["dark_gray3"], true, true};
+    ui_styles["ui.cursorline.primary"]    = {{}, palette["dark_gray3"], false, true};
+    ui_styles["ui.statusline"]            = {palette["white"], palette["blue"], true, true};
+    ui_styles["ui.statusline.powerline.normal"] = {palette["white"], palette["navy"], true, true};
+    ui_styles["ui.statusline.powerline.insert"] = {palette["white"], palette["dark_green2"], true, true};
+    ui_styles["ui.statusline.powerline.visual"] = {palette["white"], palette["special"], true, true};
+    ui_styles["ui.statusline.powerline.branch"] = {palette["white"], palette["dark_blue2"], true, true};
+    ui_styles["ui.statusline.powerline.file"]   = {palette["light_gray3"], palette["dark_blue"], true, true};
+    ui_styles["ui.statusline.powerline.fill"]   = {{}, palette["blue"], false, true};
+    ui_styles["ui.statusline.powerline.pos"]    = {palette["white"], palette["navy"], true, true};
+    ui_styles["ui.statusline.powerline.lang"]   = {palette["white"], palette["dark_blue2"], true, true};
+    ui_styles["ui.statusline.powerline.ws"]     = {palette["light_gray"], palette["dark_blue"], true, true};
+    ui_styles["ui.hunk-diff.left"]        = {{}, palette["dark_gray2"], false, true};
+    ui_styles["ui.hunk-diff.right"]       = {{}, palette["dark_gray2"], false, true};
+    ui_styles["ui.hunk-diff.add"]         = {palette["text"], palette["hunk_add_bg"], true, true};
+    ui_styles["ui.hunk-diff.del"]         = {palette["text"], palette["hunk_del_bg"], true, true};
+    ui_styles["ui.menu.selected"]         = {{}, palette["dark_blue2"], false, true};
+    ui_styles["ui.whichkey.key"]          = {palette["dark_green"], {}, true, false};
+}
 
-    styles["string"]                      = {150, 225, 140};
-    styles["string.regexp"]               = {160, 230, 170};
-    styles["string.special.path"]         = {180, 220, 160};
+ColorRGB HelixTheme::get_color(const std::string& name_or_hex, ColorRGB default_col) const {
+    if (name_or_hex.rfind('#', 0) == 0) {
+        return parse_hex_color(name_or_hex);
+    }
+    auto it = palette.find(name_or_hex);
+    if (it != palette.end()) return it->second;
+    return default_col;
+}
 
-    styles["constant.numeric"]            = {255, 180, 100};
-    styles["constant.builtin.boolean"]    = {255, 140, 100};
-    styles["constant.character.escape"]   = {255, 190, 120};
-    styles["constant"]                    = {255, 175, 115};
-
-    styles["comment"]                     = {120, 130, 145};
-    styles["comment.line"]                = {120, 130, 145};
-    styles["comment.block"]               = {120, 130, 145};
-
-    styles["operator"]                    = {200, 205, 215};
-    styles["punctuation.bracket"]         = {180, 185, 195};
-    styles["punctuation.delimiter"]       = {160, 165, 175};
-    styles["punctuation.special"]         = {220, 170, 240};
-
-    styles["diff.plus"]                   = {80, 220, 100};
-    styles["diff.minus"]                  = {240, 80, 80};
-    styles["label"]                       = {255, 190, 100};
-    styles["constructor"]                 = {240, 190, 90};
-    styles["namespace"]                   = {235, 170, 110};
+UIStyle HelixTheme::get_ui_style(const std::string& scope, const UIStyle& default_style) const {
+    auto it = ui_styles.find(scope);
+    if (it != ui_styles.end()) return it->second;
+    return default_style;
 }
 
 SyntaxStyle HelixTheme::resolve(const std::string& capture) const {
@@ -300,7 +393,151 @@ SyntaxStyle HelixTheme::resolve(const std::string& capture) const {
         if (dot == std::string::npos) break;
         cur = cur.substr(0, dot);
     }
-    return {220, 220, 220};
+    return {212, 212, 212};
+}
+
+bool HelixTheme::load_from_file(const std::string& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+
+    palette.clear();
+    styles.clear();
+    ui_styles.clear();
+    init_defaults();
+
+    std::string line;
+    bool in_palette = false;
+    std::unordered_map<std::string, std::string> syn_aliases;
+
+    while (std::getline(in, line)) {
+        size_t comment_pos = line.find('#');
+        if (comment_pos != std::string::npos) {
+            bool in_q = false;
+            for (size_t i = 0; i < comment_pos; ++i) {
+                if (line[i] == '"') in_q = !in_q;
+            }
+            if (!in_q) {
+                line = line.substr(0, comment_pos);
+            }
+        }
+        size_t start = 0;
+        while (start < line.size() && std::isspace(static_cast<unsigned char>(line[start]))) start++;
+        size_t end = line.size();
+        while (end > start && std::isspace(static_cast<unsigned char>(line[end - 1]))) end--;
+        if (start >= end) continue;
+        std::string trimmed = line.substr(start, end - start);
+
+        if (trimmed == "[palette]") {
+            in_palette = true;
+            continue;
+        } else if (trimmed.front() == '[' && trimmed.back() == ']') {
+            in_palette = false;
+            continue;
+        }
+
+        size_t eq_pos = trimmed.find('=');
+        if (eq_pos == std::string::npos) continue;
+
+        auto trim_str = [](const std::string& s) {
+            size_t a = 0;
+            while (a < s.size() && (std::isspace(static_cast<unsigned char>(s[a])) || s[a] == '"')) a++;
+            size_t b = s.size();
+            while (b > a && (std::isspace(static_cast<unsigned char>(s[b - 1])) || s[b - 1] == '"')) b--;
+            return (a < b) ? s.substr(a, b - a) : "";
+        };
+
+        std::string raw_k = trimmed.substr(0, eq_pos);
+        std::string raw_v = trimmed.substr(eq_pos + 1);
+        std::string key = trim_str(raw_k);
+
+        if (in_palette) {
+            std::string val = trim_str(raw_v);
+            if (!val.empty() && val[0] == '#') {
+                palette[key] = parse_hex_color(val);
+            }
+        } else {
+            size_t lbrace = raw_v.find('{');
+            size_t rbrace = raw_v.rfind('}');
+            if (lbrace != std::string::npos && rbrace != std::string::npos && rbrace > lbrace) {
+                std::string inner = raw_v.substr(lbrace + 1, rbrace - lbrace - 1);
+                UIStyle uistyle;
+                std::istringstream iss(inner);
+                std::string token;
+                while (std::getline(iss, token, ',')) {
+                    size_t teq = token.find('=');
+                    if (teq == std::string::npos) continue;
+                    std::string pk = trim_str(token.substr(0, teq));
+                    std::string pv = trim_str(token.substr(teq + 1));
+                    if (pk == "fg") {
+                        uistyle.fg = get_color(pv);
+                        uistyle.has_fg = true;
+                    } else if (pk == "bg") {
+                        uistyle.bg = get_color(pv);
+                        uistyle.has_bg = true;
+                    }
+                }
+                ui_styles[key] = uistyle;
+                if (uistyle.has_fg) {
+                    styles[key] = SyntaxStyle{uistyle.fg.r, uistyle.fg.g, uistyle.fg.b};
+                }
+            } else {
+                std::string val = trim_str(raw_v);
+                syn_aliases[key] = val;
+            }
+        }
+    }
+
+    for (const auto& pair : syn_aliases) {
+        std::string cur = pair.second;
+        for (int depth = 0; depth < 5; ++depth) {
+            if (cur.rfind('#', 0) == 0 || palette.find(cur) != palette.end()) break;
+            auto it = syn_aliases.find(cur);
+            if (it != syn_aliases.end()) cur = it->second;
+            else break;
+        }
+        ColorRGB col = get_color(cur);
+        styles[pair.first] = SyntaxStyle{col.r, col.g, col.b};
+        if (pair.first.rfind("ui.", 0) == 0) {
+            UIStyle u;
+            u.fg = col;
+            u.has_fg = true;
+            ui_styles[pair.first] = u;
+        }
+    }
+
+    return true;
+}
+
+bool HelixTheme::load_theme(const std::string& theme_name, const std::string& custom_dir) {
+    std::vector<std::string> search_paths;
+    if (!custom_dir.empty()) {
+        search_paths.push_back((fs::path(custom_dir) / "themes" / (theme_name + ".toml")).string());
+    }
+    search_paths.push_back("themes/" + theme_name + ".toml");
+    search_paths.push_back("./themes/" + theme_name + ".toml");
+
+    const char* home = std::getenv("HOME");
+    if (home) {
+        search_paths.push_back(std::string(home) + "/.config/fe/themes/" + theme_name + ".toml");
+        search_paths.push_back(std::string(home) + "/.local/share/fe/runtime/themes/" + theme_name + ".toml");
+    }
+    search_paths.push_back("/usr/lib/fe/runtime/themes/" + theme_name + ".toml");
+    search_paths.push_back("/usr/share/fe/runtime/themes/" + theme_name + ".toml");
+
+    for (const auto& p : search_paths) {
+        std::error_code ec;
+        if (fs::exists(p, ec) && load_from_file(p)) {
+            current_theme_name = theme_name;
+            return true;
+        }
+    }
+
+    if (theme_name == "dark_plus") {
+        init_defaults();
+        current_theme_name = "dark_plus";
+        return true;
+    }
+    return false;
 }
 
 struct SyntaxHighlighter::Impl {
@@ -417,7 +654,7 @@ void SyntaxHighlighter::update_text(const std::vector<std::string>& lines) {
             if (!name) continue;
 
             std::string cap_name(name, name_len);
-            SyntaxStyle style = theme.resolve(cap_name);
+            SyntaxStyle style = HelixTheme::instance().resolve(cap_name);
 
             TSPoint start_pt = ts.ts_node_start_point(cap.node);
             TSPoint end_pt = ts.ts_node_end_point(cap.node);
@@ -441,13 +678,13 @@ std::vector<SyntaxStyle> SyntaxHighlighter::fallback_highlight(const std::string
     std::vector<SyntaxStyle> styles(line.size(), {220, 220, 220});
     size_t i = 0;
 
-    SyntaxStyle kw_style = theme.resolve("keyword");
-    SyntaxStyle type_style = theme.resolve("type");
-    SyntaxStyle str_style = theme.resolve("string");
-    SyntaxStyle comment_style = theme.resolve("comment");
-    SyntaxStyle num_style = theme.resolve("constant.numeric");
-    SyntaxStyle fn_style = theme.resolve("function");
-    SyntaxStyle op_style = theme.resolve("operator");
+    SyntaxStyle kw_style = HelixTheme::instance().resolve("keyword");
+    SyntaxStyle type_style = HelixTheme::instance().resolve("type");
+    SyntaxStyle str_style = HelixTheme::instance().resolve("string");
+    SyntaxStyle comment_style = HelixTheme::instance().resolve("comment");
+    SyntaxStyle num_style = HelixTheme::instance().resolve("constant.numeric");
+    SyntaxStyle fn_style = HelixTheme::instance().resolve("function");
+    SyntaxStyle op_style = HelixTheme::instance().resolve("operator");
 
     while (i < line.size()) {
         if (std::isspace(static_cast<unsigned char>(line[i]))) {

@@ -948,11 +948,14 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
                 }
             }
         } else {
+            auto diff_add = HelixTheme::instance().get_ui_style("ui.hunk-diff.add", {{}, {32, 58, 32}, false, true});
+            auto diff_del = HelixTheme::instance().get_ui_style("ui.hunk-diff.del", {{}, {58, 32, 32}, false, true});
+
             if (in_left_marker) {
                 left_bg_r = 45; left_bg_g = 28; left_bg_b = 65;
             } else if (is_hunk) {
                 if (arow.left_idx >= 0) {
-                    left_bg_r = 20; left_bg_g = 36; left_bg_b = 26; // Dark green for working
+                    left_bg_r = diff_add.bg.r; left_bg_g = diff_add.bg.g; left_bg_b = diff_add.bg.b;
                 } else {
                     left_bg_r = 30; left_bg_g = 20; left_bg_b = 22;
                 }
@@ -962,7 +965,7 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
                 right_bg_r = 45; right_bg_g = 28; right_bg_b = 65;
             } else if (is_hunk) {
                 if (arow.right_idx >= 0) {
-                    right_bg_r = 38; right_bg_g = 24; right_bg_b = 26; // Dark red for HEAD
+                    right_bg_r = diff_del.bg.r; right_bg_g = diff_del.bg.g; right_bg_b = diff_del.bg.b;
                 } else {
                     right_bg_r = 18; right_bg_g = 30; right_bg_b = 22;
                 }

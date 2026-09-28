@@ -5,19 +5,62 @@
 #include <cstdint>
 #include <memory>
 
+struct ColorRGB {
+    uint8_t r{220};
+    uint8_t g{220};
+    uint8_t b{220};
+
+    ColorRGB() = default;
+    ColorRGB(uint8_t r, uint8_t g, uint8_t b) : r(r), g(g), b(b) {}
+};
+
+struct UIStyle {
+    ColorRGB fg{212, 212, 212};
+    ColorRGB bg{30, 30, 30};
+    bool has_fg{false};
+    bool has_bg{false};
+    bool bold{false};
+    bool italic{false};
+    bool underline{false};
+};
+
 struct SyntaxStyle {
     uint8_t r{220};
     uint8_t g{220};
     uint8_t b{220};
+
+    SyntaxStyle() = default;
+    SyntaxStyle(uint8_t r, uint8_t g, uint8_t b) : r(r), g(g), b(b) {}
+    SyntaxStyle(const ColorRGB& c) : r(c.r), g(c.g), b(c.b) {}
+    SyntaxStyle& operator=(const ColorRGB& c) {
+        r = c.r;
+        g = c.g;
+        b = c.b;
+        return *this;
+    }
 };
 
 class HelixTheme {
 public:
     HelixTheme();
+    static HelixTheme& instance();
+
+    bool load_theme(const std::string& theme_name, const std::string& custom_dir = "");
+    bool load_from_file(const std::string& path);
+
     SyntaxStyle resolve(const std::string& capture) const;
+    UIStyle get_ui_style(const std::string& scope, const UIStyle& default_style = {}) const;
+    ColorRGB get_color(const std::string& name_or_hex, ColorRGB default_col = {220, 220, 220}) const;
+
+    const std::string& get_name() const { return current_theme_name; }
 
 private:
+    std::string current_theme_name{"dark_plus"};
+    std::unordered_map<std::string, ColorRGB> palette;
     std::unordered_map<std::string, SyntaxStyle> styles;
+    std::unordered_map<std::string, UIStyle> ui_styles;
+
+    void init_defaults();
 };
 
 class SyntaxHighlighter {

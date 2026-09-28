@@ -735,6 +735,31 @@ REGISTER_COMMAND(
     }
 );
 
+REGISTER_COMMAND(
+    theme,
+    (std::vector<std::string>{"theme", "colorscheme", "cs"}),
+    "Set or show editor theme (:theme [name])",
+    [](CommandContext& ctx) {
+        if (ctx.argv.empty()) {
+            ctx.engine.set_info_msg("Current theme: " + HelixTheme::instance().get_name());
+            return;
+        }
+        std::string name = ctx.argv[0];
+        if (HelixTheme::instance().load_theme(name, ctx.engine.get_config().get_config_dir())) {
+            ctx.engine.get_config().settings.theme = name;
+            ctx.engine.get_config().save();
+            for (auto& b : ctx.engine.get_buffers()) {
+                if (b->syntax) {
+                    b->syntax->update_text(b->lines);
+                }
+            }
+            ctx.engine.set_info_msg("Theme set to: " + name);
+        } else {
+            ctx.engine.set_info_msg("Could not load theme: " + name);
+        }
+    }
+);
+
 struct IndentInfo {
     bool use_tabs{false};
     int tab_size{4};
@@ -1740,7 +1765,6 @@ void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
     if (is_esc(ni, key) || is_fkey(ni, key, 11) || ((key == 'q' || key == 'Q') && !rg_replace_active)) {
         if (rg_replace_active) {
             rg_replace_active = false;
-            set_info_msg("View Mode: [j/k/▲/▼] Navigate, [Enter] Open, [TAB] Replace Mode");
             return;
         }
         show_rg_popup = false;
