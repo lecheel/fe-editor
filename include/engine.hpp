@@ -60,6 +60,8 @@ private:
     std::vector<std::string> theme_list;
     int theme_selected_idx{0};
     int theme_scroll{0};
+    std::string theme_original; // theme active when popup opened; restored on cancel
+    void preview_theme(const std::string& name);
 
     // Workspace Slots (0..4) state
     bool show_workspace_list{false};

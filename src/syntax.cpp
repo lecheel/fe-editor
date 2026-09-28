@@ -396,18 +396,120 @@ SyntaxStyle HelixTheme::resolve(const std::string& capture) const {
     return {212, 212, 212};
 }
 
+namespace {
+
+std::string th_trim(const std::string& s) {
+    size_t a = 0;
+    while (a < s.size() && (std::isspace(static_cast<unsigned char>(s[a])) || s[a] == '"')) a++;
+    size_t b = s.size();
+    while (b > a && (std::isspace(static_cast<unsigned char>(s[b - 1])) || s[b - 1] == '"')) b--;
+    return (a < b) ? s.substr(a, b - a) : "";
+}
+
+std::string find_theme_file(const std::string& name, const std::string& near_dir) {
+    std::vector<std::string> c;
+    if (!near_dir.empty()) c.push_back((fs::path(near_dir) / (name + ".toml")).string());
+    c.push_back("themes/" + name + ".toml");
+    const char* home = std::getenv("HOME");
+    if (home) {
+        c.push_back(std::string(home) + "/.config/fe/themes/" + name + ".toml");
+        c.push_back(std::string(home) + "/.local/share/fe/runtime/themes/" + name + ".toml");
+    }
+    c.push_back("/usr/lib/fe/runtime/themes/" + name + ".toml");
+    c.push_back("/usr/share/fe/runtime/themes/" + name + ".toml");
+    for (const auto& p : c) {
+        std::error_code ec;
+        if (fs::exists(p, ec)) return p;
+    }
+    return "";
+}
+
+// Collects raw palette + alias entries; `inherits = "parent"` is honored
+// (parent first, child overrides). Previously `inherits` was ignored, so
+// themes like darcula-solid lost their parent's palette and styles.
+void collect_theme_raw(const std::string& path,
+                       std::unordered_map<std::string, ColorRGB>& pal,
+                       std::unordered_map<std::string, std::string>& al,
+                       int depth) {
+    if (depth > 8) return;
+    std::ifstream in(path);
+    if (!in.is_open()) return;
+
+    std::vector<std::string> lines;
+    std::string line;
+    std::string parent;
+    while (std::getline(in, line)) {
+        size_t cp = line.find('#');
+        if (cp != std::string::npos) {
+            bool in_q = false;
+            for (size_t i = 0; i < cp; ++i) {
+                if (line[i] == '"') in_q = !in_q;
+            }
+            if (!in_q) line = line.substr(0, cp);
+        }
+        std::string t = th_trim(line);
+        if (t.empty()) continue;
+        size_t eq = line.find('=');
+        if (eq != std::string::npos && th_trim(line.substr(0, eq)) == "inherits") {
+            parent = th_trim(line.substr(eq + 1));
+            continue;
+        }
+        lines.push_back(line);
+    }
+
+    if (!parent.empty()) {
+        std::string pp = find_theme_file(parent, fs::path(path).parent_path().string());
+        if (!pp.empty()) collect_theme_raw(pp, pal, al, depth + 1);
+    }
+
+    bool in_palette = false;
+    for (const auto& l : lines) {
+        std::string t = th_trim(l);
+        std::string raw = l;
+        size_t s = 0;
+        while (s < raw.size() && std::isspace(static_cast<unsigned char>(raw[s]))) s++;
+        size_t e = raw.size();
+        while (e > s && std::isspace(static_cast<unsigned char>(raw[e - 1]))) e--;
+        std::string tr = raw.substr(s, e - s);
+        if (tr == "[palette]") { in_palette = true; continue; }
+        if (!tr.empty() && tr.front() == '[' && tr.back() == ']') { in_palette = false; continue; }
+        size_t eq = tr.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = th_trim(tr.substr(0, eq));
+        std::string rv = tr.substr(eq + 1);
+        if (in_palette) {
+            std::string val = th_trim(rv);
+            if (!val.empty() && val[0] == '#') pal[key] = parse_hex_color(val);
+        } else {
+            size_t lb = rv.find('{');
+            size_t rb = rv.rfind('}');
+            if (lb != std::string::npos && rb != std::string::npos && rb > lb) {
+                al[key] = "{" + rv.substr(lb + 1, rb - lb - 1) + "}";
+            } else {
+                al[key] = th_trim(rv);
+            }
+        }
+    }
+}
+
+} // namespace
+
 bool HelixTheme::load_from_file(const std::string& path) {
     std::ifstream in(path);
     if (!in.is_open()) return false;
 
+    // Do NOT call init_defaults() here: the dark_plus defaults (e.g. the more
+    // specific "keyword.control.conditional") shadowed the loaded theme's
+    // less specific keys in resolve(), so themes only partially applied.
     palette.clear();
     styles.clear();
     ui_styles.clear();
-    init_defaults();
 
     std::string line;
     bool in_palette = false;
     std::unordered_map<std::string, std::string> syn_aliases;
+    std::vector<std::string> reversed_keys;
+    collect_theme_raw(path, palette, syn_aliases, 0);
 
     while (std::getline(in, line)) {
         size_t comment_pos = line.find('#');
@@ -514,6 +616,9 @@ bool HelixTheme::load_from_file(const std::string& path) {
                     uistyle.has_bg = true;
                 }
             }
+            if (inner.find("reversed") != std::string::npos) {
+                reversed_keys.push_back(key);
+            }
             ui_styles[key] = uistyle;
             if (uistyle.has_fg) {
                 styles[key] = SyntaxStyle{uistyle.fg.r, uistyle.fg.g, uistyle.fg.b};
@@ -527,6 +632,26 @@ bool HelixTheme::load_from_file(const std::string& path) {
                 u.has_fg = true;
                 ui_styles[key] = u;
             }
+        }
+    }
+
+    // modifiers = ["reversed"] (e.g. ui.cursor): swap fg/bg against ui.background.
+    // Without this the cursor became plain grey-on-dark instead of a block.
+    {
+        ColorRGB bg_col{30, 30, 30};
+        ColorRGB fg_col{212, 212, 212};
+        auto bit = ui_styles.find("ui.background");
+        if (bit != ui_styles.end()) {
+            if (bit->second.has_bg) bg_col = bit->second.bg;
+            if (bit->second.has_fg) fg_col = bit->second.fg;
+        }
+        for (const auto& k : reversed_keys) {
+            UIStyle& u = ui_styles[k];
+            ColorRGB f = u.has_fg ? u.fg : fg_col;
+            u.fg = bg_col;
+            u.bg = f;
+            u.has_fg = true;
+            u.has_bg = true;
         }
     }
 

@@ -4872,11 +4872,36 @@ void VimEngine::open_theme_popup() {
         }
     }
     theme_scroll = 0;
+    theme_original = cur_name;
     show_theme_popup = true;
-    set_info_msg("Themes (F6 / :theme): [▲/▼] Navigate  [Enter] Select  [Esc/F6] Close");
+    set_info_msg("Themes (F6 / :theme): [▲/▼] Live preview  [Enter] Keep  [Esc/F6] Revert");
+}
+
+void VimEngine::preview_theme(const std::string& name) {
+    if (HelixTheme::instance().load_theme(name, config.get_config_dir())) {
+        for (auto& b : buffers) {
+            if (b->syntax) {
+                b->syntax->update_text(b->lines);
+            }
+        }
+        if (hunk_diff_head_syntax) {
+            hunk_diff_head_syntax->update_text(hunk_diff_head_lines);
+        }
+    } else {
+        set_info_msg("Could not load theme: " + name);
+    }
 }
 
 void VimEngine::close_theme_popup() {
+    // Cancel path: if theme_original is still set, the selection was not
+    // confirmed, so restore the theme that was active before previewing.
+    if (!theme_original.empty()) {
+        std::string orig = theme_original;
+        theme_original.clear();
+        if (HelixTheme::instance().get_name() != orig) {
+            preview_theme(orig);
+        }
+    }
     show_theme_popup = false;
     set_info_msg("");
 }
@@ -4894,41 +4919,54 @@ void VimEngine::handle_theme_popup_input(const ncinput& ni, uint32_t key) {
 
     int total = static_cast<int>(theme_list.size());
 
+    // Move selection and apply the theme immediately (live preview).
+    auto select_idx = [&](int idx) {
+        theme_selected_idx = idx;
+        preview_theme(theme_list[theme_selected_idx]);
+    };
+
     if (key == NCKEY_UP || key == 'k' || key == 'K' || is_ctrl(ni, key, 'p')) {
-        theme_selected_idx = (theme_selected_idx + total - 1) % total;
+        select_idx((theme_selected_idx + total - 1) % total);
         return;
     }
 
     if (key == NCKEY_DOWN || key == 'j' || key == 'J' || is_ctrl(ni, key, 'n')) {
-        theme_selected_idx = (theme_selected_idx + 1) % total;
+        select_idx((theme_selected_idx + 1) % total);
         return;
     }
 
     if (key == NCKEY_HOME || key == 'g') {
-        theme_selected_idx = 0;
+        select_idx(0);
         return;
     }
 
     if (key == NCKEY_END || key == 'G') {
-        theme_selected_idx = total - 1;
+        select_idx(total - 1);
+        return;
+    }
+
+    if (key == NCKEY_PGUP) {
+        select_idx(std::max(0, theme_selected_idx - 5));
+        return;
+    }
+
+    if (key == NCKEY_PGDOWN) {
+        select_idx(std::min(total - 1, theme_selected_idx + 5));
         return;
     }
 
     if (is_enter(ni, key) || key == ' ') {
         if (theme_selected_idx >= 0 && theme_selected_idx < total) {
             std::string chosen = theme_list[theme_selected_idx];
-            if (HelixTheme::instance().load_theme(chosen, config.get_config_dir())) {
+            if (HelixTheme::instance().get_name() != chosen) {
+                preview_theme(chosen);
+            }
+            if (HelixTheme::instance().get_name() == chosen) {
                 config.settings.theme = chosen;
                 config.save();
-                for (auto& b : buffers) {
-                    if (b->syntax) {
-                        b->syntax->update_text(b->lines);
-                    }
-                }
+                theme_original.clear(); // confirmed: do not revert on close
                 close_theme_popup();
                 set_info_msg("Theme set to: " + chosen);
-            } else {
-                set_info_msg("Could not load theme: " + chosen);
             }
         }
         return;
