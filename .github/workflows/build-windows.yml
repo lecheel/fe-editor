@@ -1,0 +1,50 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0} # Tells GH Actions to run commands inside the MSYS2 environment
+        
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64       # Use the 64-bit MinGW environment
+          update: true           # Update package databases
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-notcurses
+            mingw-w64-x86_64-libgit2
+
+      - name: Configure CMake
+        run: cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Project
+        run: cmake --build build --config Release
+
+      # MSYS2 builds are dynamically linked by default. 
+      # We must copy the required .dll files next to the .exe so it runs on standard Windows.
+      - name: Copy DLLs to Build Folder
+        run: cp /mingw64/bin/*.dll build/
+
+      - name: Upload Windows Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: fe-windows-exe
+          path: |
+            build/fe.exe
+            build/*.dll
+          retention-days: 14

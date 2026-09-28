@@ -25,5 +25,8 @@ add_executable(fe
     src/workspace.cpp
 )
 
+if(WIN32)
+    target_link_libraries(fe PRIVATE gdi32 user32 ws2_32 winpthread)
+endif()
 target_include_directories(fe PRIVATE include)
 target_link_libraries(fe PRIVATE PkgConfig::NOTCURSES PkgConfig::LIBGIT2 ${CMAKE_DL_LIBS})
