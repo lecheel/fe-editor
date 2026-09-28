@@ -460,26 +460,8 @@ bool HelixTheme::load_from_file(const std::string& path) {
             size_t rbrace = raw_v.rfind('}');
             if (lbrace != std::string::npos && rbrace != std::string::npos && rbrace > lbrace) {
                 std::string inner = raw_v.substr(lbrace + 1, rbrace - lbrace - 1);
-                UIStyle uistyle;
-                std::istringstream iss(inner);
-                std::string token;
-                while (std::getline(iss, token, ',')) {
-                    size_t teq = token.find('=');
-                    if (teq == std::string::npos) continue;
-                    std::string pk = trim_str(token.substr(0, teq));
-                    std::string pv = trim_str(token.substr(teq + 1));
-                    if (pk == "fg") {
-                        uistyle.fg = get_color(pv);
-                        uistyle.has_fg = true;
-                    } else if (pk == "bg") {
-                        uistyle.bg = get_color(pv);
-                        uistyle.has_bg = true;
-                    }
-                }
-                ui_styles[key] = uistyle;
-                if (uistyle.has_fg) {
-                    styles[key] = SyntaxStyle{uistyle.fg.r, uistyle.fg.g, uistyle.fg.b};
-                }
+                // Store raw inline table string for second-pass resolution after [palette] is loaded
+                syn_aliases[key] = "{" + inner + "}";
             } else {
                 std::string val = trim_str(raw_v);
                 syn_aliases[key] = val;
@@ -487,21 +469,64 @@ bool HelixTheme::load_from_file(const std::string& path) {
         }
     }
 
-    for (const auto& pair : syn_aliases) {
-        std::string cur = pair.second;
+    // Second pass: resolve all syntax aliases and UI styles with a fully populated palette
+    auto resolve_token = [&](const std::string& start_val, ColorRGB def_c) -> ColorRGB {
+        std::string cur = start_val;
         for (int depth = 0; depth < 5; ++depth) {
             if (cur.rfind('#', 0) == 0 || palette.find(cur) != palette.end()) break;
             auto it = syn_aliases.find(cur);
-            if (it != syn_aliases.end()) cur = it->second;
-            else break;
+            if (it != syn_aliases.end() && !it->second.empty() && it->second.front() != '{') {
+                cur = it->second;
+            } else {
+                break;
+            }
         }
-        ColorRGB col = get_color(cur);
-        styles[pair.first] = SyntaxStyle{col.r, col.g, col.b};
-        if (pair.first.rfind("ui.", 0) == 0) {
-            UIStyle u;
-            u.fg = col;
-            u.has_fg = true;
-            ui_styles[pair.first] = u;
+        return get_color(cur, def_c);
+    };
+
+    auto trim_token = [](const std::string& s) {
+        size_t a = 0;
+        while (a < s.size() && (std::isspace(static_cast<unsigned char>(s[a])) || s[a] == '"')) a++;
+        size_t b = s.size();
+        while (b > a && (std::isspace(static_cast<unsigned char>(s[b - 1])) || s[b - 1] == '"')) b--;
+        return (a < b) ? s.substr(a, b - a) : "";
+    };
+
+    for (const auto& pair : syn_aliases) {
+        const std::string& key = pair.first;
+        const std::string& raw_val = pair.second;
+
+        if (!raw_val.empty() && raw_val.front() == '{' && raw_val.back() == '}') {
+            std::string inner = raw_val.substr(1, raw_val.size() - 2);
+            UIStyle uistyle;
+            std::istringstream iss(inner);
+            std::string token;
+            while (std::getline(iss, token, ',')) {
+                size_t teq = token.find('=');
+                if (teq == std::string::npos) continue;
+                std::string pk = trim_token(token.substr(0, teq));
+                std::string pv = trim_token(token.substr(teq + 1));
+                if (pk == "fg") {
+                    uistyle.fg = resolve_token(pv, {212, 212, 212});
+                    uistyle.has_fg = true;
+                } else if (pk == "bg") {
+                    uistyle.bg = resolve_token(pv, {30, 30, 30});
+                    uistyle.has_bg = true;
+                }
+            }
+            ui_styles[key] = uistyle;
+            if (uistyle.has_fg) {
+                styles[key] = SyntaxStyle{uistyle.fg.r, uistyle.fg.g, uistyle.fg.b};
+            }
+        } else {
+            ColorRGB col = resolve_token(raw_val, {212, 212, 212});
+            styles[key] = SyntaxStyle{col.r, col.g, col.b};
+            if (key.rfind("ui.", 0) == 0) {
+                UIStyle u;
+                u.fg = col;
+                u.has_fg = true;
+                ui_styles[key] = u;
+            }
         }
     }
 

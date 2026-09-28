@@ -50,7 +50,7 @@ public:
 
     SyntaxStyle resolve(const std::string& capture) const;
     UIStyle get_ui_style(const std::string& scope, const UIStyle& default_style = {}) const;
-    ColorRGB get_color(const std::string& name_or_hex, ColorRGB default_col = {220, 220, 220}) const;
+    ColorRGB get_color(const std::string& name_or_hex, ColorRGB default_col = {30, 30, 30}) const;
 
     const std::string& get_name() const { return current_theme_name; }
 
