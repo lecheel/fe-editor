@@ -1,0 +1,51 @@
+name: Linux Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config build-essential libnotcurses-dev libgit2-dev
+
+      - name: Configure CMake
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Project
+        run: cmake --build build
+
+      - name: Package Linux Binary
+        run: |
+          mkdir -p dist/fe
+          cp build/fe dist/fe/
+          tar -czvf fe-linux-x86_64.tar.gz -C dist fe
+
+      # 1. Upload as an Artifact (for normal branch pushes / PRs)
+      - name: Upload Linux Package as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fe-linux-x86_64
+          path: fe-linux-x86_64.tar.gz
+          retention-days: 14
+
+      # 2. Create or Update GitHub Release (ONLY when a tag is pushed)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: fe-linux-x86_64.tar.gz

@@ -1,0 +1,52 @@
+name: macOS Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    env:
+      PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          brew install cmake ninja pkg-config notcurses libgit2
+
+      - name: Configure CMake
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Project
+        run: cmake --build build
+
+      - name: Package macOS Binary
+        run: |
+          mkdir -p dist/fe
+          cp build/fe dist/fe/
+          tar -czvf fe-macos-arm64.tar.gz -C dist fe
+
+      # 1. Upload as an Artifact (for normal branch pushes / PRs)
+      - name: Upload macOS Package as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fe-macos-arm64
+          path: fe-macos-arm64.tar.gz
+          retention-days: 14
+
+      # 2. Create or Update GitHub Release (ONLY when a tag is pushed)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: fe-macos-arm64.tar.gz
