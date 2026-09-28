@@ -24,16 +24,18 @@ jobs:
           update: true           # Update package databases
           install: >-
             mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-notcurses
             mingw-w64-x86_64-libgit2
 
       - name: Configure CMake
-        run: cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+        # Changed from "MinGW Makefiles" to "Ninja"
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Project
-        run: cmake --build build --config Release
+        run: cmake --build build
 
       # MSYS2 builds are dynamically linked by default. 
       # We must copy the required .dll files next to the .exe so it runs on standard Windows.
@@ -45,6 +47,4 @@ jobs:
         with:
           name: fe-windows-exe
           path: |
-            build/fe.exe
-            build/*.dll
-          retention-days: 14
+            build/
