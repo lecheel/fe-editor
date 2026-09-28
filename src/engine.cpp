@@ -176,10 +176,13 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     keymap.load(config.get_config_dir());
 
     bool delta_mode = false;
+    bool no_ws = false;
     std::vector<std::string> filtered_files;
     for (const auto& f : files) {
         if (f == "--delta" || f == "-d" || f == "--diff") {
             delta_mode = true;
+        } else if (f == "--nows" || f == "--no-ws") {
+            no_ws = true;
         } else if (f.rfind("--delta=", 0) == 0) {
             delta_mode = true;
             std::string r = f.substr(8);
@@ -211,7 +214,21 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     }
     stdplane = notcurses_stdplane(nc);
 
-    if (!file_targets.empty()) {
+    bool restored_ws = false;
+    if (file_targets.empty() && !no_ws && !delta_mode) {
+        WorkspaceStorage storage(config.get_config_dir());
+        int last_act = storage.get_last_active();
+        if (last_act >= 0 && last_act < 5) {
+            WorkspaceSnapshot snap;
+            if (storage.load_snapshot(last_act, snap) && !snap.buffers.empty()) {
+                restored_ws = load_workspace(last_act, false);
+            }
+        }
+    }
+
+    if (restored_ws) {
+        // Workspace restored directly
+    } else if (!file_targets.empty()) {
         for (const auto& target : file_targets) {
             buffers.push_back(TextBuffer::from_file(target.path));
         }
@@ -307,31 +324,33 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
         }));
     }
 
-    Window w;
-    w.id = 1;
-    w.buffer_idx = 0;
-    restore_window_position(w, *buffers[0]);
+    if (!restored_ws) {
+        Window w;
+        w.id = 1;
+        w.buffer_idx = 0;
+        restore_window_position(w, *buffers[0]);
 
-    for (size_t i = 0; i < file_targets.size() && i < buffers.size(); ++i) {
-        const auto& target = file_targets[i];
-        if (target.line > 0) {
-            int ty = std::clamp(target.line - 1, 0, std::max(0, static_cast<int>(buffers[i]->lines.size()) - 1));
-            int tx = 0;
-            if (target.col > 0 && ty < static_cast<int>(buffers[i]->lines.size())) {
-                tx = std::clamp(target.col - 1, 0, static_cast<int>(buffers[i]->lines[ty].size()));
-            }
-            std::string key = !buffers[i]->file_path.empty() ? buffers[i]->file_path : buffers[i]->name;
-            config.set_position(key, ty, tx, 0);
+        for (size_t i = 0; i < file_targets.size() && i < buffers.size(); ++i) {
+            const auto& target = file_targets[i];
+            if (target.line > 0) {
+                int ty = std::clamp(target.line - 1, 0, std::max(0, static_cast<int>(buffers[i]->lines.size()) - 1));
+                int tx = 0;
+                if (target.col > 0 && ty < static_cast<int>(buffers[i]->lines.size())) {
+                    tx = std::clamp(target.col - 1, 0, static_cast<int>(buffers[i]->lines[ty].size()));
+                }
+                std::string key = !buffers[i]->file_path.empty() ? buffers[i]->file_path : buffers[i]->name;
+                config.set_position(key, ty, tx, 0);
 
-            if (i == 0) {
-                w.cursors = {{ty, tx}};
-                w.clamp_all_cursors(*buffers[0], mode);
-                w.scroll_y = std::max(0, ty - 10);
+                if (i == 0) {
+                    w.cursors = {{ty, tx}};
+                    w.clamp_all_cursors(*buffers[0], mode);
+                    w.scroll_y = std::max(0, ty - 10);
+                }
             }
         }
-    }
 
-    windows.push_back(w);
+        windows.push_back(w);
+    }
 
     load_rg_cache();
     load_cmd_history();
@@ -349,9 +368,11 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             open_hunk_diff();
         }
     } else if (!file_targets.empty() && file_targets[0].line > 0) {
+        int cy = windows.empty() ? 1 : (windows.front().cursors.front().y + 1);
+        int cx = windows.empty() ? 1 : (windows.front().cursors.front().x + 1);
         set_info_msg("\"" + buffers[0]->name + "\" [" +
-                     std::to_string(w.cursors.front().y + 1) + ":" +
-                     std::to_string(w.cursors.front().x + 1) + "]");
+                     std::to_string(cy) + ":" +
+                     std::to_string(cx) + "]");
     } else {
         set_info_msg("[F12] Help | [F1] Git View | [F5] Hunk Diff | [F4] Popup | [F2/F3] Hunks | [F9] Settings | [Space] Leader");
     }
@@ -398,6 +419,9 @@ void VimEngine::save_cmd_history() {
 }
 
 VimEngine::~VimEngine() {
+    if (workspace_active && workspace_slot >= 0 && workspace_slot < 5) {
+        save_workspace(workspace_slot, false);
+    }
     save_all_positions();
     save_cmd_history();
     config.save();

@@ -132,6 +132,54 @@ inline bool is_colon(const ncinput& ni, uint32_t key) {
            (ni.shift && (key == ';' || ni.id == ';'));
 }
 
+inline int utf8_char_len(unsigned char c) {
+    if ((c & 0x80) == 0) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+inline bool is_utf8_continuation(unsigned char c) {
+    return (c & 0xC0) == 0x80;
+}
+
+inline int utf8_prev_char(const std::string& line, int pos) {
+    if (pos <= 0) return 0;
+    int p = pos - 1;
+    while (p > 0 && is_utf8_continuation(static_cast<unsigned char>(line[p]))) {
+        p--;
+    }
+    return p;
+}
+
+inline int utf8_next_char(const std::string& line, int pos) {
+    int len = static_cast<int>(line.size());
+    if (pos >= len) return len;
+    int clen = utf8_char_len(static_cast<unsigned char>(line[pos]));
+    return std::min(len, pos + clen);
+}
+
+inline std::string codepoint_to_utf8(uint32_t cp) {
+    std::string out;
+    if (cp <= 0x7F) {
+        out += static_cast<char>(cp);
+    } else if (cp <= 0x7FF) {
+        out += static_cast<char>(0xC0 | ((cp >> 6) & 0x1F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp <= 0xFFFF) {
+        out += static_cast<char>(0xE0 | ((cp >> 12) & 0x0F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp <= 0x10FFFF) {
+        out += static_cast<char>(0xF0 | ((cp >> 18) & 0x07));
+        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+    return out;
+}
+
 inline char get_shifted_ascii(char ch) {
     switch (ch) {
         case '1': return '!';
@@ -181,7 +229,13 @@ inline std::string get_input_text(const ncinput& ni, uint32_t key) {
         }
     }
 
-    // 2. Fallback to key or ni.id
+    // 2. Unicode codepoints > 127
+    uint32_t cp = (key > 127) ? key : ni.id;
+    if (cp > 127 && !nckey_synthesized_p(cp)) {
+        return codepoint_to_utf8(cp);
+    }
+
+    // 3. Fallback to key or ni.id
     uint32_t raw = (key >= 32 && key < 127) ? key : ni.id;
     if (raw >= 32 && raw <= 126) {
         char c = static_cast<char>(raw);

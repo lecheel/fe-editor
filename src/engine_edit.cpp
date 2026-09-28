@@ -283,6 +283,66 @@ void ActionRegistry::init_default_actions() {
         }
     );
 
+    register_action("ws_list", {"ws", "workspaces", "workspace"}, "Workspace", "Open workspace slots list (Alt-W)",
+        [](ActionContext& ctx) {
+            ctx.engine.open_workspace_list();
+            return true;
+        }
+    );
+
+    register_action("ws_save", {}, "Workspace", "Save current session into active workspace slot",
+        [](ActionContext& ctx) {
+            if (ctx.engine.workspace_slot >= 0) {
+                ctx.engine.save_workspace(ctx.engine.workspace_slot);
+            } else {
+                ctx.engine.open_workspace_list();
+            }
+            return true;
+        }
+    );
+
+    register_action("ws_clear", {}, "Workspace", "Clear active workspace marker",
+        [](ActionContext& ctx) {
+            ctx.engine.clear_active_workspace();
+            return true;
+        }
+    );
+
+    register_action("ws_load_0", {"ws0"}, "Workspace", "Load workspace slot 0 (Alt-0)",
+        [](ActionContext& ctx) {
+            ctx.engine.load_workspace(0);
+            return true;
+        }
+    );
+
+    register_action("ws_load_1", {"ws1"}, "Workspace", "Load workspace slot 1 (Alt-1)",
+        [](ActionContext& ctx) {
+            ctx.engine.load_workspace(1);
+            return true;
+        }
+    );
+
+    register_action("ws_load_2", {"ws2"}, "Workspace", "Load workspace slot 2 (Alt-2)",
+        [](ActionContext& ctx) {
+            ctx.engine.load_workspace(2);
+            return true;
+        }
+    );
+
+    register_action("ws_load_3", {"ws3"}, "Workspace", "Load workspace slot 3 (Alt-3)",
+        [](ActionContext& ctx) {
+            ctx.engine.load_workspace(3);
+            return true;
+        }
+    );
+
+    register_action("ws_load_4", {"ws4"}, "Workspace", "Load workspace slot 4 (Alt-4)",
+        [](ActionContext& ctx) {
+            ctx.engine.load_workspace(4);
+            return true;
+        }
+    );
+
     register_action("ripgrep", {"grep", "vg"}, "Search", "Search project with ripgrep (F11)",
         [](ActionContext& ctx) {
             std::string w = ctx.engine.get_word_under_cursor();
@@ -606,6 +666,30 @@ REGISTER_COMMAND(
 );
 
 REGISTER_COMMAND(
+    workspace,
+    (std::vector<std::string>{"ws", "workspace", "workspaces"}),
+    "Open workspace manager popup (:ws [save|load|clear <slot>])",
+    ([](CommandContext& ctx) {
+        if (!ctx.argv.empty()) {
+            std::string sub = ctx.argv[0];
+            if (sub == "save" && ctx.argv.size() >= 2) {
+                int slot = std::clamp(std::stoi(ctx.argv[1]), 0, 4);
+                ctx.engine.save_workspace(slot);
+                return;
+            } else if (sub == "load" && ctx.argv.size() >= 2) {
+                int slot = std::clamp(std::stoi(ctx.argv[1]), 0, 4);
+                ctx.engine.load_workspace(slot);
+                return;
+            } else if (sub == "clear") {
+                ctx.engine.clear_active_workspace();
+                return;
+            }
+        }
+        ctx.engine.open_workspace_list();
+    })
+);
+
+REGISTER_COMMAND(
     minimap,
     (std::vector<std::string>{"minimap", "mm"}),
     "Toggle code minimap",
@@ -672,6 +756,22 @@ bool VimEngine::handle_global_shortcuts(const ncinput& ni, uint32_t key) {
     if (is_alt(ni, key, 'e')) {
         open_filepicker();
         return true;
+    }
+
+    // Alt+0..4 directly loads workspace slots 0..4
+    if (ni.alt && !ni.ctrl) {
+        uint32_t base_k = (key >= '0' && key <= '4') ? key : ni.id;
+        if (base_k >= '0' && base_k <= '4') {
+            int slot = static_cast<int>(base_k - '0');
+            if (!load_workspace(slot)) {
+                set_info_msg("Workspace " + std::to_string(slot) + " is empty");
+            }
+            return true;
+        }
+        if (base_k == 'W' || (ni.shift && (base_k == 'w' || key == 'w'))) {
+            open_workspace_list();
+            return true;
+        }
     }
 
     if (mode != Mode::COMMAND) {
@@ -850,6 +950,12 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
     // 9. File picker popup
     if (show_filepicker) {
         handle_filepicker_input(ni, key);
+        return;
+    }
+
+    // 9b. Workspace list popup
+    if (show_workspace_list) {
+        handle_workspace_list_input(ni, key);
         return;
     }
 
@@ -2652,10 +2758,21 @@ bool VimEngine::handle_navigation(const ncinput& ni, uint32_t key) {
             win.clamp_all_cursors(buf, mode);
             return true;
         case NCKEY_LEFT:
-            for (auto& c : win.cursors) c.x = std::max(0, c.x - 1);
+            for (auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    c.x = Keymap::utf8_prev_char(buf.lines[c.y], c.x);
+                } else {
+                    c.x = std::max(0, c.x - 1);
+                }
+            }
             return true;
         case NCKEY_RIGHT:
-            for (auto& c : win.cursors) c.x = std::min(win.get_max_x(buf, c.y, mode), c.x + 1);
+            for (auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    int max_x = win.get_max_x(buf, c.y, mode);
+                    c.x = std::min(max_x, Keymap::utf8_next_char(buf.lines[c.y], c.x));
+                }
+            }
             return true;
         case NCKEY_HOME:
             for (auto& c : win.cursors) c.x = 0;
@@ -3003,7 +3120,13 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
             set_info_msg("-- VISUAL --");
             break;
         case 'h':
-            for (auto& c : win.cursors) c.x = std::max(0, c.x - 1);
+            for (auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    c.x = Keymap::utf8_prev_char(buf.lines[c.y], c.x);
+                } else {
+                    c.x = std::max(0, c.x - 1);
+                }
+            }
             break;
         case 'l':
             jump_to_next_hunk();
@@ -4577,6 +4700,10 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
                         del_len = info.tab_size;
                     }
                 }
+                if (del_len == 1) {
+                    int prev_p = Keymap::utf8_prev_char(line, c.x);
+                    del_len = std::max(1, c.x - prev_p);
+                }
                 line.erase(c.x - del_len, del_len);
                 c.x -= del_len;
             }
@@ -4649,5 +4776,281 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         if (buf.syntax) buf.syntax->update_text(buf.lines);
         win.deduplicate_cursors();
         update_autocomplete_after_edit();
+    }
+}
+
+void VimEngine::open_workspace_list() {
+    show_filepicker = false;
+    show_settings_popup = false;
+    show_git_hunk_popup = false;
+    show_whichkey_popup = false;
+    show_buffer_list = false;
+    show_rg_popup = false;
+    show_hunk_diff = false;
+    show_git_status = false;
+    close_cmd_completion();
+    leader_pending = false;
+
+    workspace_cursor = (workspace_slot >= 0 && workspace_slot < 5) ? workspace_slot : 0;
+    workspace_editing = false;
+    workspace_edit_draft.clear();
+    workspace_status_msg.clear();
+    show_workspace_list = true;
+    set_info_msg("Workspaces: [Enter] Load  [s] Save  [c] Clear  [d] Delete  [e] Name");
+}
+
+void VimEngine::close_workspace_list() {
+    show_workspace_list = false;
+    workspace_editing = false;
+    workspace_edit_draft.clear();
+    workspace_status_msg.clear();
+    set_info_msg("");
+}
+
+bool VimEngine::load_workspace(int slot, bool show_msg) {
+    if (slot < 0 || slot >= 5) return false;
+    WorkspaceStorage storage(config.get_config_dir());
+    WorkspaceSnapshot snap;
+    if (!storage.load_snapshot(slot, snap) || snap.buffers.empty()) {
+        if (show_msg) {
+            set_info_msg("Workspace " + std::to_string(slot) + " is empty");
+        }
+        return false;
+    }
+
+    show_filepicker = false;
+    show_settings_popup = false;
+    show_git_hunk_popup = false;
+    show_whichkey_popup = false;
+    show_buffer_list = false;
+    show_rg_popup = false;
+    show_hunk_diff = false;
+    show_git_status = false;
+    show_mini_help = false;
+    show_cmd_completion = false;
+    show_workspace_list = false;
+    workspace_editing = false;
+    mode = Mode::NORMAL;
+
+    buffers.clear();
+    for (const auto& path : snap.buffers) {
+        buffers.push_back(TextBuffer::from_file(path));
+    }
+    if (buffers.empty()) {
+        buffers.push_back(std::make_shared<TextBuffer>("untitled", std::vector<std::string>{""}));
+    }
+
+    windows.clear();
+    for (size_t wi = 0; wi < snap.windows.size(); ++wi) {
+        const auto& wsnap = snap.windows[wi];
+        size_t b_idx = 0;
+        for (size_t bi = 0; bi < buffers.size(); ++bi) {
+            if (buffers[bi]->file_path == wsnap.file || buffers[bi]->name == wsnap.file) {
+                b_idx = bi;
+                break;
+            }
+        }
+        Window w;
+        w.id = next_win_id++;
+        w.buffer_idx = b_idx;
+        w.scroll_y = wsnap.scroll_y;
+        w.scroll_x = wsnap.scroll_x;
+        int max_y = std::max(0, static_cast<int>(buffers[b_idx]->lines.size()) - 1);
+        int cy = std::clamp(wsnap.scroll_y, 0, max_y);
+        w.cursors = {{cy, 0}};
+        w.clamp_all_cursors(*buffers[b_idx], mode);
+        windows.push_back(w);
+    }
+
+    if (windows.empty()) {
+        Window w;
+        w.id = next_win_id++;
+        w.buffer_idx = 0;
+        windows.push_back(w);
+    }
+
+    active_win_idx = std::clamp(snap.active_idx, 0, static_cast<int>(windows.size()) - 1);
+    split_mode = (windows.size() > 1) ? SplitType::VERTICAL : SplitType::NONE;
+    layout_windows();
+
+    workspace_slot = slot;
+    workspace_active = true;
+    storage.set_last_active(slot);
+
+    if (show_msg) {
+        set_info_msg("Loaded workspace " + std::to_string(slot) +
+                     (snap.description.empty() ? "" : (" (" + snap.description + ")")));
+    }
+    return true;
+}
+
+bool VimEngine::save_workspace(int slot, bool show_msg) {
+    if (slot < 0 || slot >= 5) return false;
+    WorkspaceStorage storage(config.get_config_dir());
+
+    WorkspaceSnapshot snap;
+    snap.description = storage.get_description(slot);
+    snap.active_idx = static_cast<int>(active_win_idx);
+
+    for (const auto& b : buffers) {
+        std::string p = !b->file_path.empty() ? b->file_path : b->name;
+        if (!p.empty()) {
+            snap.buffers.push_back(p);
+        }
+    }
+
+    for (const auto& w : windows) {
+        if (w.buffer_idx < buffers.size()) {
+            const auto& b = buffers[w.buffer_idx];
+            WorkspaceWindowSnapshot wsnap;
+            wsnap.file = !b->file_path.empty() ? b->file_path : b->name;
+            wsnap.scroll_y = w.scroll_y;
+            wsnap.scroll_x = w.scroll_x;
+            snap.windows.push_back(wsnap);
+        }
+    }
+
+    bool ok = storage.save_snapshot(slot, snap);
+    if (ok) {
+        workspace_slot = slot;
+        workspace_active = true;
+        storage.set_last_active(slot);
+        if (show_msg) {
+            set_info_msg("Saved workspace " + std::to_string(slot));
+        }
+    }
+    return ok;
+}
+
+bool VimEngine::delete_workspace(int slot) {
+    if (slot < 0 || slot >= 5) return false;
+    WorkspaceStorage storage(config.get_config_dir());
+    bool ok = storage.delete_snapshot(slot);
+    if (workspace_slot == slot) {
+        workspace_slot = -1;
+        workspace_active = false;
+        storage.set_last_active(-1);
+    }
+    return ok;
+}
+
+bool VimEngine::clear_active_workspace() {
+    WorkspaceStorage storage(config.get_config_dir());
+    workspace_slot = -1;
+    workspace_active = false;
+    storage.set_last_active(-1);
+    set_info_msg("Cleared active workspace");
+    return true;
+}
+
+bool VimEngine::rename_workspace(int slot, const std::string& desc) {
+    if (slot < 0 || slot >= 5) return false;
+    WorkspaceStorage storage(config.get_config_dir());
+    return storage.set_description(slot, desc);
+}
+
+std::string VimEngine::get_workspace_description(int slot) {
+    if (slot < 0 || slot >= 5) return "";
+    WorkspaceStorage storage(config.get_config_dir());
+    return storage.get_description(slot);
+}
+
+void VimEngine::handle_workspace_list_input(const ncinput& ni, uint32_t key) {
+    if (workspace_editing) {
+        if (is_esc(ni, key)) {
+            workspace_editing = false;
+            workspace_edit_draft.clear();
+            workspace_status_msg = "Rename cancelled";
+            return;
+        }
+        if (is_enter(ni, key)) {
+            rename_workspace(workspace_cursor, workspace_edit_draft);
+            workspace_editing = false;
+            workspace_status_msg = "Renamed workspace " + std::to_string(workspace_cursor);
+            workspace_edit_draft.clear();
+            return;
+        }
+        if (is_backspace(ni, key)) {
+            if (!workspace_edit_draft.empty()) {
+                workspace_edit_draft.pop_back();
+            }
+            return;
+        }
+        std::string ins = Keymap::get_input_text(ni, key);
+        if (!ins.empty()) {
+            workspace_edit_draft += ins;
+            return;
+        }
+        return;
+    }
+
+    if (is_esc(ni, key) || key == 'q' || key == 'Q') {
+        close_workspace_list();
+        return;
+    }
+
+    if (key == 'j' || key == NCKEY_DOWN || is_ctrl(ni, key, 'n')) {
+        workspace_cursor = (workspace_cursor + 1) % 5;
+        workspace_status_msg.clear();
+        return;
+    }
+
+    if (key == 'k' || key == NCKEY_UP || is_ctrl(ni, key, 'p')) {
+        workspace_cursor = (workspace_cursor + 4) % 5;
+        workspace_status_msg.clear();
+        return;
+    }
+
+    if (key == 'g' || key == NCKEY_HOME) {
+        workspace_cursor = 0;
+        workspace_status_msg.clear();
+        return;
+    }
+
+    if (key == 'G' || key == NCKEY_END) {
+        workspace_cursor = 4;
+        workspace_status_msg.clear();
+        return;
+    }
+
+    if (is_enter(ni, key)) {
+        WorkspaceStorage storage(config.get_config_dir());
+        WorkspaceSnapshot snap;
+        if (!storage.load_snapshot(workspace_cursor, snap) || snap.buffers.empty()) {
+            workspace_status_msg = "Workspace " + std::to_string(workspace_cursor) + " is empty";
+            return;
+        }
+        load_workspace(workspace_cursor);
+        return;
+    }
+
+    if (key == 's' || key == 'S') {
+        save_workspace(workspace_cursor);
+        workspace_status_msg = "Saved workspace " + std::to_string(workspace_cursor);
+        return;
+    }
+
+    if (key == 'c' || key == 'C') {
+        if (workspace_cursor != workspace_slot) {
+            workspace_status_msg = "Cursor must be on active workspace (" +
+                                  (workspace_slot >= 0 ? std::to_string(workspace_slot) : "none") + ") to clear";
+            return;
+        }
+        clear_active_workspace();
+        workspace_status_msg = "Cleared active workspace";
+        return;
+    }
+
+    if (key == 'd' || key == 'D') {
+        delete_workspace(workspace_cursor);
+        workspace_status_msg = "Deleted workspace " + std::to_string(workspace_cursor);
+        return;
+    }
+
+    if (key == 'e' || key == 'E') {
+        workspace_editing = true;
+        workspace_edit_draft = get_workspace_description(workspace_cursor);
+        workspace_status_msg.clear();
+        return;
     }
 }

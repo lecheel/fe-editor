@@ -4,6 +4,7 @@
 #include "config.hpp"
 #include "window.hpp"
 #include "git.hpp"
+#include "workspace.hpp"
 #include "command.hpp"
 #include "keymap.hpp"
 #include <notcurses/notcurses.h>
@@ -22,6 +23,9 @@ public:
     };
     YankRegister yank_reg;
     KeymapConfig keymap;
+
+    int workspace_slot{-1};      // Session-local active workspace slot (0..4, or -1)
+    bool workspace_active{false}; // True if session has adopted an active workspace
 
     explicit VimEngine(bool verbose = false, const std::vector<std::string>& files = {});
     ~VimEngine();
@@ -50,6 +54,13 @@ private:
     void save_cmd_history();
     int next_win_id{2};
     bool show_settings_popup{false};
+
+    // Workspace Slots (0..4) state
+    bool show_workspace_list{false};
+    int workspace_cursor{0};
+    bool workspace_editing{false};
+    std::string workspace_edit_draft;
+    std::string workspace_status_msg;
     int settings_selected_idx{0};
 
     bool show_git_hunk_popup{false};
@@ -255,6 +266,17 @@ public:
 
     void handle_settings_popup(const ncinput& ni, uint32_t key);
     void render_settings_popup(unsigned int screen_h, unsigned int screen_w);
+
+    void open_workspace_list();
+    void close_workspace_list();
+    bool load_workspace(int slot, bool show_msg = true);
+    bool save_workspace(int slot, bool show_msg = true);
+    bool delete_workspace(int slot);
+    bool clear_active_workspace();
+    bool rename_workspace(int slot, const std::string& desc);
+    std::string get_workspace_description(int slot);
+    void handle_workspace_list_input(const ncinput& ni, uint32_t key);
+    void render_workspace_list(unsigned int screen_h, unsigned int screen_w);
 
     void save_window_position(const Window& win, const TextBuffer& buf);
     void restore_window_position(Window& win, const TextBuffer& buf);

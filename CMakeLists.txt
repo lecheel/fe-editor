@@ -22,6 +22,7 @@ add_executable(fe
     src/git.cpp
     src/log.cpp
     src/syntax.cpp
+    src/workspace.cpp
 )
 
 target_include_directories(fe PRIVATE include)

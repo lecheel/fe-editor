@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstdio>
+#include <wchar.h>
 
 namespace fs = std::filesystem;
 
@@ -69,7 +70,29 @@ void VimEngine::render() {
             Cursor primary = aw.cursors.front();
             int gutter_w = get_line_num_w(active_buf());
             int screen_cy = aw.y + (primary.y - aw.scroll_y);
-            int screen_cx = aw.x + gutter_w + primary.x;
+            int cursor_col = 0;
+            if (primary.y >= 0 && primary.y < static_cast<int>(active_buf().lines.size())) {
+                const std::string& pline = active_buf().lines[primary.y];
+                size_t bi = 0;
+                while (bi < pline.size() && static_cast<int>(bi) < primary.x) {
+                    unsigned char lead = static_cast<unsigned char>(pline[bi]);
+                    int clen = Keymap::utf8_char_len(lead);
+                    if (bi + clen > pline.size()) clen = static_cast<int>(pline.size() - bi);
+                    std::string g = pline.substr(bi, clen);
+                    int cw = 1;
+                    wchar_t wc = 0;
+                    mbstate_t mbs = {};
+                    if (mbrtowc(&wc, g.data(), g.size(), &mbs) > 0) {
+                        int w = wcwidth(wc);
+                        if (w > 0) cw = w;
+                    }
+                    cursor_col += cw;
+                    bi += clen;
+                }
+            } else {
+                cursor_col = primary.x;
+            }
+            int screen_cx = aw.x + gutter_w + cursor_col - aw.scroll_x;
             if (screen_cy >= aw.y && screen_cy < aw.y + aw.h &&
                 screen_cx >= aw.x && screen_cx < aw.x + aw.w) {
                 notcurses_cursor_enable(nc, screen_cy, screen_cx);
@@ -104,6 +127,9 @@ void VimEngine::render() {
         notcurses_cursor_disable(nc);
     } else if (show_git_hunk_popup) {
         render_git_hunk_popup(screen_h, screen_w);
+        notcurses_cursor_disable(nc);
+    } else if (show_workspace_list) {
+        render_workspace_list(screen_h, screen_w);
         notcurses_cursor_disable(nc);
     } else if (show_whichkey_popup) {
         render_whichkey_popup(screen_h, screen_w);

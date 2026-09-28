@@ -6,10 +6,156 @@
 #include <algorithm>
 #include <cstdio>
 #include <set>
+#include <wchar.h>
 
 extern int g_hunk_marker_style;
 
 namespace fs = std::filesystem;
+
+void VimEngine::render_workspace_list(unsigned int screen_h, unsigned int screen_w) {
+    int popup_w = std::max(56, static_cast<int>(screen_w * 0.50));
+    popup_w = std::min(popup_w, static_cast<int>(screen_w) - 4);
+    int popup_h = 10;
+    int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
+    int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
+
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    for (int r = 0; r < popup_h; ++r) {
+        for (int c = 0; c < popup_w; ++c) {
+            ncplane_putchar_yx(stdplane, popup_y + r, popup_x + c, ' ');
+        }
+    }
+
+    ncplane_set_fg_rgb8(stdplane, 170, 115, 250);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x, "╭");
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - 1, "╮");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x, "╰");
+    ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + popup_w - 1, "╯");
+
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putstr_yx(stdplane, popup_y, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + c, "─");
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + c, "─");
+    }
+    for (int r = 1; r < popup_h - 1; ++r) {
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x, "│");
+        ncplane_putstr_yx(stdplane, popup_y + r, popup_x + popup_w - 1, "│");
+    }
+    ncplane_putstr_yx(stdplane, popup_y + 2, popup_x, "├");
+    ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + popup_w - 1, "┤");
+
+    std::string title = " Workspaces (Alt-W / :ws) ";
+    ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
+    ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
+
+    std::string active_header = (workspace_active && workspace_slot >= 0) ?
+        (" [Active: WS" + std::to_string(workspace_slot) + "] ") : " [No Active WS] ";
+    int ah_x = popup_x + popup_w - static_cast<int>(active_header.size()) - 2;
+    if (ah_x > popup_x + static_cast<int>(title.size()) + 4) {
+        if (workspace_active && workspace_slot >= 0) ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+        else ncplane_set_fg_rgb8(stdplane, 140, 150, 160);
+        ncplane_putstr_yx(stdplane, popup_y, ah_x, active_header.c_str());
+    }
+
+    ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "Slot");
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 9, "Session Contents");
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 34, "Description");
+
+    WorkspaceStorage storage(config.get_config_dir());
+    for (int s = 0; s < 5; ++s) {
+        int draw_y = popup_y + 3 + s;
+        bool is_sel = (s == workspace_cursor);
+        bool is_act = (s == workspace_slot && workspace_active);
+
+        WorkspaceSnapshot snap;
+        bool populated = storage.load_snapshot(s, snap) && !snap.buffers.empty();
+
+        if (is_sel) {
+            ncplane_set_bg_rgb8(stdplane, 45, 65, 115);
+            ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        } else {
+            ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+            ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
+        }
+
+        for (int c = 1; c < popup_w - 1; ++c) {
+            ncplane_putchar_yx(stdplane, draw_y, popup_x + c, ' ');
+        }
+
+        if (is_sel) {
+            ncplane_set_fg_rgb8(stdplane, 255, 205, 60);
+            ncplane_putstr_yx(stdplane, draw_y, popup_x + 1, "▶");
+        }
+
+        std::string slot_tag = "[" + std::to_string(s) + (is_act ? "*" : " ") + "]";
+        if (is_act) {
+            ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
+        } else if (is_sel) {
+            ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        } else {
+            ncplane_set_fg_rgb8(stdplane, 160, 170, 185);
+        }
+        ncplane_putstr_yx(stdplane, draw_y, popup_x + 3, slot_tag.c_str());
+
+        std::string info_col;
+        if (populated) {
+            int nf = static_cast<int>(snap.buffers.size());
+            int nw = static_cast<int>(snap.windows.size());
+            info_col = "(" + std::to_string(nf) + (nf == 1 ? " file, " : " files, ") +
+                       std::to_string(nw) + (nw == 1 ? " window)" : " windows)");
+        } else {
+            info_col = "(empty)";
+        }
+
+        bool hide_info_for_edit = (is_sel && workspace_editing && !populated);
+
+        if (!hide_info_for_edit) {
+            if (is_sel) {
+                ncplane_set_fg_rgb8(stdplane, populated ? 180 : 130, populated ? 220 : 130, populated ? 255 : 140);
+            } else {
+                ncplane_set_fg_rgb8(stdplane, populated ? 130 : 100, populated ? 160 : 105, populated ? 190 : 115);
+            }
+            ncplane_putstr_yx(stdplane, draw_y, popup_x + 9, info_col.c_str());
+        }
+
+        int desc_x = hide_info_for_edit ? (popup_x + 9) : (popup_x + 34);
+        int max_desc_w = (popup_x + popup_w - 2) - desc_x;
+
+        if (is_sel && workspace_editing) {
+            std::string disp_draft = workspace_edit_draft + "▏";
+            ncplane_set_fg_rgb8(stdplane, 255, 240, 120);
+            if (static_cast<int>(disp_draft.size()) > max_desc_w && max_desc_w > 0) {
+                disp_draft = disp_draft.substr(0, max_desc_w);
+            }
+            ncplane_putstr_yx(stdplane, draw_y, desc_x, disp_draft.c_str());
+        } else {
+            std::string desc = snap.description;
+            if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+            else ncplane_set_fg_rgb8(stdplane, 200, 205, 215);
+
+            if (static_cast<int>(desc.size()) > max_desc_w && max_desc_w > 0) {
+                desc = desc.substr(0, max_desc_w);
+            }
+            ncplane_putstr_yx(stdplane, draw_y, desc_x, desc.c_str());
+        }
+    }
+
+    ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
+    if (workspace_editing) {
+        std::string footer = " [Enter] Commit name  [Esc] Cancel ";
+        ncplane_set_fg_rgb8(stdplane, 255, 215, 80);
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
+    } else if (!workspace_status_msg.empty()) {
+        std::string footer = " " + workspace_status_msg + " ";
+        ncplane_set_fg_rgb8(stdplane, 255, 215, 80);
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
+    } else {
+        std::string footer = " [Enter] Load  [s] Save  [c] Clear  [d] Delete  [e] Name  [Esc] Close ";
+        ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
+        ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
+    }
+}
 
 void VimEngine::render_cmd_completion(unsigned int screen_h, unsigned int screen_w) {
     if (cmd_completion_candidates.empty()) return;
@@ -824,58 +970,87 @@ void VimEngine::render_window(Window& win, bool is_active) {
             }
             int ghost_len = static_cast<int>(ghost_str.size());
 
+            ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
             for (int c = 0; c < text_avail_w; ++c) {
-                int char_idx = win.scroll_x + c;
-                int draw_x = win.x + gutter_w + c;
+                ncplane_putchar_yx(stdplane, draw_y, win.x + gutter_w + c, ' ');
+            }
 
-                if (ghost_len > 0) {
-                    if (char_idx >= primary.x && char_idx < primary.x + ghost_len) {
-                        int ghost_i = char_idx - primary.x;
-                        bool has_cursor = (char_idx == primary.x);
-                        if (has_cursor) {
-                            ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
-                            ncplane_set_bg_rgb8(stdplane, 255, 180, 50);
-                            char ch[2] = {ghost_str[ghost_i], '\0'};
-                            ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
-                        } else {
-                            ncplane_set_fg_rgb8(stdplane, 130, 140, 155);
-                            ncplane_set_bg_rgb8(stdplane, 24, 26, 32);
-                            ncplane_on_styles(stdplane, NCSTYLE_ITALIC);
-                            char ch[2] = {ghost_str[ghost_i], '\0'};
-                            ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
-                            ncplane_off_styles(stdplane, NCSTYLE_ITALIC);
-                        }
-                        continue;
-                    }
+            size_t byte_idx = 0;
+            int col_x = 0;
 
-                    int orig_char_idx = (char_idx < primary.x) ? char_idx : (char_idx - ghost_len);
-                    if (orig_char_idx < static_cast<int>(syn_styles.size())) {
-                        ncplane_set_fg_rgb8(stdplane, syn_styles[orig_char_idx].r, syn_styles[orig_char_idx].g, syn_styles[orig_char_idx].b);
-                    } else {
-                        ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
-                    }
-                    ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
+            while (byte_idx < line.size()) {
+                unsigned char lead = static_cast<unsigned char>(line[byte_idx]);
+                int char_len = Keymap::utf8_char_len(lead);
+                if (byte_idx + char_len > line.size()) {
+                    char_len = static_cast<int>(line.size() - byte_idx);
+                }
+                std::string glyph = line.substr(byte_idx, char_len);
 
-                    if (orig_char_idx >= 0 && orig_char_idx < static_cast<int>(line.size())) {
-                        char ch[2] = {line[orig_char_idx], '\0'};
-                        ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
-                    } else {
-                        ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
-                    }
-                    continue;
+                int char_width = 1;
+                wchar_t wc = 0;
+                mbstate_t mbs = {};
+                if (mbrtowc(&wc, glyph.data(), glyph.size(), &mbs) > 0) {
+                    int cw = wcwidth(wc);
+                    if (cw > 0) char_width = cw;
                 }
 
-                bool has_cursor = cursor_set.count({line_idx, char_idx});
+                bool has_cursor = cursor_set.count({line_idx, static_cast<int>(byte_idx)});
                 bool in_visual = false;
-
                 if (is_active) {
                     if (mode == Mode::VISUAL_BLOCK) {
                         if (line_idx >= v_min_y && line_idx <= v_max_y &&
-                            char_idx >= v_min_x && char_idx <= v_max_x) {
+                            static_cast<int>(byte_idx) >= v_min_x && static_cast<int>(byte_idx) <= v_max_x) {
                             in_visual = true;
                         }
                     } else if (mode == Mode::VISUAL) {
-                        Cursor cur_pt{line_idx, char_idx};
+                        Cursor cur_pt{line_idx, static_cast<int>(byte_idx)};
+                        Cursor v_start = std::min(win.visual_anchor, primary);
+                        Cursor v_end = std::max(win.visual_anchor, primary);
+                        if (!(cur_pt < v_start) && !(v_end < cur_pt)) {
+                            in_visual = true;
+                        }
+                    }
+                }
+
+                int screen_col = col_x - win.scroll_x;
+                if (screen_col >= 0 && screen_col < text_avail_w) {
+                    int draw_x = win.x + gutter_w + screen_col;
+
+                    if (has_cursor) {
+                        ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
+                        ncplane_set_bg_rgb8(stdplane, 255, 180, 50);
+                    } else if (in_visual) {
+                        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+                        ncplane_set_bg_rgb8(stdplane, 55, 75, 135);
+                    } else {
+                        if (byte_idx < syn_styles.size()) {
+                            ncplane_set_fg_rgb8(stdplane, syn_styles[byte_idx].r, syn_styles[byte_idx].g, syn_styles[byte_idx].b);
+                        } else {
+                            ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
+                        }
+                        ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
+                    }
+
+                    ncplane_putstr_yx(stdplane, draw_y, draw_x, glyph.c_str());
+                }
+
+                byte_idx += char_len;
+                col_x += char_width;
+            }
+
+            int end_screen_col = col_x - win.scroll_x;
+            if (end_screen_col >= 0 && end_screen_col < text_avail_w) {
+                int draw_x = win.x + gutter_w + end_screen_col;
+                bool has_cursor = cursor_set.count({line_idx, static_cast<int>(line.size())});
+                bool in_visual = false;
+                if (is_active) {
+                    if (mode == Mode::VISUAL_BLOCK) {
+                        if (line_idx >= v_min_y && line_idx <= v_max_y &&
+                            static_cast<int>(line.size()) >= v_min_x && static_cast<int>(line.size()) <= v_max_x) {
+                            in_visual = true;
+                        }
+                    } else if (mode == Mode::VISUAL) {
+                        Cursor cur_pt{line_idx, static_cast<int>(line.size())};
                         Cursor v_start = std::min(win.visual_anchor, primary);
                         Cursor v_end = std::max(win.visual_anchor, primary);
                         if (!(cur_pt < v_start) && !(v_end < cur_pt)) {
@@ -887,26 +1062,27 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 if (has_cursor) {
                     ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
                     ncplane_set_bg_rgb8(stdplane, 255, 180, 50);
+                    ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
                 } else if (in_visual) {
                     ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
                     ncplane_set_bg_rgb8(stdplane, 55, 75, 135);
-                } else {
-                    if (char_idx < static_cast<int>(syn_styles.size())) {
-                        ncplane_set_fg_rgb8(stdplane, syn_styles[char_idx].r, syn_styles[char_idx].g, syn_styles[char_idx].b);
-                    } else {
-                        ncplane_set_fg_rgb8(stdplane, 220, 220, 220);
-                    }
-                    ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
+                    ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
                 }
+            }
 
-                if (char_idx < static_cast<int>(line.size())) {
-                    char ch[2] = {line[char_idx], '\0'};
-                    ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
-                } else if ((has_cursor || in_visual) && char_idx == static_cast<int>(line.size())) {
-                    ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
-                } else {
-                    ncplane_set_bg_rgb8(stdplane, 16, 16, 18);
-                    ncplane_putstr_yx(stdplane, draw_y, draw_x, " ");
+            if (ghost_len > 0) {
+                int ghost_col = end_screen_col;
+                for (int gi = 0; gi < ghost_len; ++gi) {
+                    int sc = ghost_col + gi;
+                    if (sc >= 0 && sc < text_avail_w) {
+                        int draw_x = win.x + gutter_w + sc;
+                        ncplane_set_fg_rgb8(stdplane, 130, 140, 155);
+                        ncplane_set_bg_rgb8(stdplane, 24, 26, 32);
+                        ncplane_on_styles(stdplane, NCSTYLE_ITALIC);
+                        char ch[2] = {ghost_str[gi], '\0'};
+                        ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
+                        ncplane_off_styles(stdplane, NCSTYLE_ITALIC);
+                    }
                 }
             }
         } else {
@@ -1028,6 +1204,21 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
     }
 
     int cur_x = 0;
+
+    // --- Left Segment 0: [Workspace Slot or FE] ---
+    std::string ws_label;
+    uint8_t ws_r, ws_g, ws_b;
+    if (workspace_active && workspace_slot >= 0 && workspace_slot < 5) {
+        ws_label = " WS" + std::to_string(workspace_slot) + " ";
+        ws_r = 135; ws_g = 65; ws_b = 205;
+    } else {
+        ws_label = " FE ";
+        ws_r = 45; ws_g = 50; ws_b = 62;
+    }
+    ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+    ncplane_set_bg_rgb8(stdplane, ws_r, ws_g, ws_b);
+    ncplane_putstr_yx(stdplane, y, cur_x, ws_label.c_str());
+    cur_x += static_cast<int>(ws_label.size());
 
     // --- Left Segment 1: [mode] ---
     std::string mode_str = " NORMAL ";
