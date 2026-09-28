@@ -5,7 +5,27 @@
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#define RTLD_LAZY 0
+inline void* dlopen(const char* filename, int) {
+    return reinterpret_cast<void*>(LoadLibraryA(filename));
+}
+inline void* dlsym(void* handle, const char* symbol) {
+    return reinterpret_cast<void*>(GetProcAddress(reinterpret_cast<HMODULE>(handle), symbol));
+}
+inline int dlclose(void* handle) {
+    return FreeLibrary(reinterpret_cast<HMODULE>(handle)) ? 0 : -1;
+}
+#else
 #include <dlfcn.h>
+#endif
 #include <algorithm>
 
 namespace fs = std::filesystem;
@@ -93,6 +113,11 @@ struct TsLib {
     void init() {
         if (loaded) return;
         const char* lib_names[] = {
+#ifdef _WIN32
+            "tree-sitter.dll",
+            "libtree-sitter.dll",
+            "libtree-sitter-0.dll",
+#endif
             "libtree-sitter.so.0",
             "libtree-sitter.so",
             "/usr/lib/libtree-sitter.so.0",
@@ -187,6 +212,12 @@ std::string find_query_file(const std::string& lang) {
 void* load_lang_parser(const std::string& lang) {
     const char* home = std::getenv("HOME");
     std::vector<std::string> candidates = {
+#ifdef _WIN32
+        "tree-sitter-" + lang + ".dll",
+        "libtree-sitter-" + lang + ".dll",
+        "tree_sitter_" + lang + ".dll",
+        "./grammars/" + lang + ".dll",
+#endif
         "libtree-sitter-" + lang + ".so",
         "tree_sitter_" + lang + ".so",
         "./grammars/" + lang + ".so"
