@@ -62,6 +62,19 @@ inline bool is_ctrl(const ncinput& ni, uint32_t key, char ch) {
     return false;
 }
 
+inline bool is_ctrl_shift(const ncinput& ni, uint32_t key, char ch) {
+    if (!ni.ctrl || !ni.shift) return false;
+    char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    if (ni.id == lower || ni.id == upper) return true;
+    if (key == static_cast<uint32_t>(lower) || key == static_cast<uint32_t>(upper)) return true;
+    if (lower >= 'a' && lower <= 'z') {
+        uint32_t ctrl_code = lower - 'a' + 1;
+        if (key == ctrl_code) return true;
+    }
+    return false;
+}
+
 inline bool is_esc(const ncinput& ni, uint32_t key) {
     return key == NCKEY_ESC || ni.id == NCKEY_ESC || key == 27;
 }
@@ -296,6 +309,9 @@ inline std::string key_to_string(const ncinput& ni, uint32_t key) {
         else if (key >= 1 && key <= 26) ch = static_cast<char>('a' + key - 1);
         else if (key >= 32 && key < 127) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(key)));
         if (ch != '\0') {
+            if (ni.shift) {
+                return std::string("<C-S-") + ch + ">";
+            }
             return std::string("<C-") + ch + ">";
         }
     }
@@ -346,6 +362,13 @@ inline std::string normalize_key_chord(const std::string& raw) {
             int num = 0;
             try { num = std::stoi(lower_inner.substr(1)); } catch (...) {}
             if (num >= 1 && num <= 12) return "<F" + std::to_string(num) + ">";
+        }
+
+        if (lower_inner.rfind("c-s-", 0) == 0 && lower_inner.size() == 5) {
+            return std::string("<C-S-") + static_cast<char>(std::tolower(static_cast<unsigned char>(lower_inner[4]))) + ">";
+        }
+        if (lower_inner.rfind("ctrl-shift-", 0) == 0 && lower_inner.size() == 12) {
+            return std::string("<C-S-") + static_cast<char>(std::tolower(static_cast<unsigned char>(lower_inner[11]))) + ">";
         }
 
         if (lower_inner.rfind("c-", 0) == 0 && lower_inner.size() == 3) {

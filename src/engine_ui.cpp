@@ -745,7 +745,17 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
     std::string title;
     uint8_t border_r = 170, border_g = 115, border_b = 250;
 
-    if (whichkey_mode == WhichKeyMode::WINDOW) {
+    if (leader_p_pending) {
+        title = " Paste [Space-p] ";
+        border_r = 80; border_g = 220; border_b = 120;
+        col1 = {
+            {"p", "Full Replace Buffer"},
+            {"v", "Paste from Clipboard"}
+        };
+        col2 = {
+            {"Esc", "Cancel"}
+        };
+    } else if (whichkey_mode == WhichKeyMode::WINDOW) {
         title = " Window Ops [Ctrl-w] ";
         border_r = 75; border_g = 175; border_b = 245;
         col1 = {
@@ -768,8 +778,9 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
         col1 = {
             {"f", "File Picker"},
             {"g", "Grep Cursor"},
+            {"y", "Copy to OS (OSC 52)"},
+            {"p", "Paste Menu (pp/pv)"},
             {"w", "Save Buffer"},
-            {"u", "Undo"},
             {"q", "Quit"}
         };
         col2 = {
@@ -777,7 +788,8 @@ void VimEngine::render_whichkey_popup(unsigned int screen_h, unsigned int screen
             {"h", "Hunk Popup (F4)"},
             {"j", "Next Hunk"},
             {"k", "Prev Hunk"},
-            {"l", "Gutter Settings"}
+            {"l", "Gutter Settings"},
+            {"u", "Undo"}
         };
     }
 

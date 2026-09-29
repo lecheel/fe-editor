@@ -13,6 +13,21 @@
 #include <set>
 #include <unordered_set>
 #include <algorithm>
+#include <cstdlib>
+#include <cstdio>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#include <poll.h>
+#else
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 extern int g_hunk_marker_style;
 
@@ -88,7 +103,11 @@ void KeymapConfig::load(const std::string& config_dir) {
                 out << "{\n"
                     << "  \"normal\": {\n"
                     << "    \"<C-s>\": \":w\",\n"
+                    << "    \"<C-S-v>\": \"bracket_paste\",\n"
                     << "    \"<Space>w\": \":w\",\n"
+                    << "    \"<Space>y\": \"copy_clipboard\",\n"
+                    << "    \"<Space>pp\": \"full_replace_paste\",\n"
+                    << "    \"<Space>pv\": \"paste_clipboard\",\n"
                     << "    \"<Space>q\": \":q\",\n"
                     << "    \"<Space>f\": \"filepicker\",\n"
                     << "    \"<Space>g\": \"ripgrep\",\n"
@@ -100,11 +119,16 @@ void KeymapConfig::load(const std::string& config_dir) {
                     << "  },\n"
                     << "  \"insert\": {\n"
                     << "    \"<C-s>\": \":w\",\n"
+                    << "    \"<C-S-v>\": \"bracket_paste\",\n"
                     << "    \"<A-u>\": \"undo\",\n"
                     << "    \"<A-d>\": \"delete_line\"\n"
                     << "  },\n"
                     << "  \"visual\": {\n"
                     << "    \"<C-s>\": \":w\",\n"
+                    << "    \"<C-S-v>\": \"bracket_paste\",\n"
+                    << "    \"<Space>y\": \"copy_clipboard\",\n"
+                    << "    \"<Space>pp\": \"full_replace_paste\",\n"
+                    << "    \"<Space>pv\": \"paste_clipboard\",\n"
                     << "    \"H\": \"0\",\n"
                     << "    \"L\": \"$\"\n"
                     << "  }\n"
@@ -177,6 +201,27 @@ void ActionRegistry::init_default_actions() {
     register_action("quit", {"q"}, "Window", "Quit editor",
         [](ActionContext& ctx) {
             ctx.engine.execute_command("q");
+            return true;
+        }
+    );
+
+    register_action("copy_clipboard", {"leader_y", "clipboard_copy", "copy_os", "copy"}, "Edit", "Copy line or selection to system clipboard (OSC 52)",
+        [](ActionContext& ctx) {
+            ctx.engine.copy_selection_to_clipboard();
+            return true;
+        }
+    );
+
+    register_action("full_replace_paste", {"pp", "replace_paste", "paste_replace"}, "Edit", "Full replace paste from clipboard (OSC 52)",
+        [](ActionContext& ctx) {
+            ctx.engine.paste_full_replace();
+            return true;
+        }
+    );
+
+    register_action("paste_clipboard", {"pv", "bracket_paste", "paste_os", "paste"}, "Edit", "Paste from clipboard at cursor (OSC 52)",
+        [](ActionContext& ctx) {
+            ctx.engine.paste_from_clipboard(true);
             return true;
         }
     );
@@ -595,10 +640,23 @@ bool KeymapConfig::handle_whichkey(VimEngine& engine, const ncinput& ni, uint32_
     if (k_str.empty()) return false;
 
     std::string chord = "<Space>" + k_str;
-    auto it = normal_map.find(chord);
-    if (it != normal_map.end()) {
-        execute_action(engine, Mode::NORMAL, it->second);
-        return true;
+    Mode cur_mode = engine.get_mode();
+    const std::unordered_map<std::string, std::string>* target_map = nullptr;
+    if (cur_mode == Mode::NORMAL) target_map = &normal_map;
+    else if (cur_mode == Mode::VISUAL || cur_mode == Mode::VISUAL_BLOCK) target_map = &visual_map;
+    else if (cur_mode == Mode::INSERT) target_map = &insert_map;
+
+    if (target_map) {
+        auto it = target_map->find(chord);
+        if (it != target_map->end()) {
+            return execute_action(engine, cur_mode, it->second);
+        }
+    }
+    if (target_map != &normal_map) {
+        auto it = normal_map.find(chord);
+        if (it != normal_map.end()) {
+            return execute_action(engine, cur_mode, it->second);
+        }
     }
     return false;
 }
@@ -684,6 +742,33 @@ REGISTER_COMMAND(
         ctx.engine.update_window_scroll(ctx.engine.active_win(), ctx.engine.active_buf());
         ctx.engine.set_info_msg("Exported " + std::to_string(actions.size()) + " actions to " + buf_name);
     })
+);
+
+REGISTER_COMMAND(
+    copy_clipboard,
+    (std::vector<std::string>{"cp", "copy", "clipboard"}),
+    "Copy current line or selection to system clipboard (:cp)",
+    [](CommandContext& ctx) {
+        ctx.engine.copy_selection_to_clipboard();
+    }
+);
+
+REGISTER_COMMAND(
+    full_replace_paste,
+    (std::vector<std::string>{"pp", "replace_paste", "pastereplace"}),
+    "Replace entire buffer with clipboard contents (:pp)",
+    [](CommandContext& ctx) {
+        ctx.engine.paste_full_replace();
+    }
+);
+
+REGISTER_COMMAND(
+    paste_clipboard,
+    (std::vector<std::string>{"pv", "paste", "bracketpaste"}),
+    "Paste from clipboard at cursor (:pv)",
+    [](CommandContext& ctx) {
+        ctx.engine.paste_from_clipboard(true);
+    }
 );
 
 REGISTER_COMMAND(
@@ -1012,9 +1097,19 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    // 10. Leader key WhichKey popup / Window Ops popup
-    if (leader_pending || ctrl_w_pending) {
+    // 10. Leader key WhichKey popup / Window Ops popup / Leader P submode
+    if (leader_pending || ctrl_w_pending || leader_p_pending) {
         handle_whichkey_popup(ni, key);
+        return;
+    }
+
+    // 10b. Global OS Bracket Paste via Ctrl-Shift-V
+    if (Keymap::is_ctrl_shift(ni, key, 'v')) {
+        if (mode == Mode::COMMAND) {
+            handle_command_mode(ni, key);
+        } else {
+            paste_from_clipboard(true);
+        }
         return;
     }
 
@@ -1888,22 +1983,32 @@ void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
     }
 
     if (key == NCKEY_PGDOWN) {
-        rg_selected_display_idx = std::min(static_cast<int>(rg_display_lines.size()) - 1, rg_selected_display_idx + 10);
-        if (rg_selected_display_idx >= 0 && rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
-            int midx = rg_display_lines[rg_selected_display_idx].match_idx;
-            if (midx >= 0) rg_selected_match_idx = midx;
+        if (key == NCKEY_PGDOWN) {
+            rg_selected_display_idx = std::min(static_cast<int>(rg_display_lines.size()) - 1, rg_selected_display_idx + 10);
+            if (rg_selected_display_idx >= 0 && rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
+                int midx = rg_display_lines[rg_selected_display_idx].match_idx;
+                if (midx >= 0) rg_selected_match_idx = midx;
+            }
+            return;
         }
-        return;
-    }
 
-    if (rg_replace_active) {
-        if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
-            rg_replace_query += static_cast<char>(key);
-            return;
-        }
-        if (ni.utf8[0] != '\0' && !ni.alt && !ni.ctrl) {
-            rg_replace_query += reinterpret_cast<const char*>(ni.utf8);
-            return;
+        if (rg_replace_active) {
+            if (Keymap::is_ctrl_shift(ni, key, 'v')) {
+                std::string clip = get_system_clipboard();
+                for (char c : clip) {
+                    if (c == '\r' || c == '\n') break;
+                    rg_replace_query += c;
+                }
+                return;
+            }
+            if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
+                rg_replace_query += static_cast<char>(key);
+                return;
+            }
+            if (ni.utf8[0] != '\0' && !ni.alt && !ni.ctrl) {
+                rg_replace_query += reinterpret_cast<const char*>(ni.utf8);
+                return;
+            }
         }
     }
 
@@ -2029,6 +2134,40 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
     auto& win = active_win();
     auto& buf = active_buf();
 
+    if (leader_p_pending) {
+        leader_p_pending = false;
+        leader_pending = false;
+        show_whichkey_popup = false;
+        if (is_esc(ni, key)) {
+            set_info_msg("");
+            return;
+        }
+        std::string second_k = Keymap::key_to_string(ni, key);
+        std::string full_chord = "<Space>p" + second_k;
+        const std::unordered_map<std::string, std::string>* target_map =
+            (mode == Mode::VISUAL || mode == Mode::VISUAL_BLOCK) ? &keymap.visual_map : &keymap.normal_map;
+        auto it = target_map->find(full_chord);
+        if (it != target_map->end()) {
+            keymap.execute_action(*this, mode, it->second);
+            return;
+        }
+        it = keymap.normal_map.find(full_chord);
+        if (it != keymap.normal_map.end()) {
+            keymap.execute_action(*this, mode, it->second);
+            return;
+        }
+        if (key == 'p' || key == 'P') {
+            paste_full_replace();
+            return;
+        }
+        if (key == 'v' || key == 'V') {
+            paste_from_clipboard(true);
+            return;
+        }
+        set_info_msg("Paste cancelled.");
+        return;
+    }
+
     bool was_ctrl_w = ctrl_w_pending || (whichkey_mode == WhichKeyMode::WINDOW);
     leader_pending = false;
     ctrl_w_pending = false;
@@ -2131,6 +2270,14 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
             }
             break;
         }
+        case 'y':
+            copy_selection_to_clipboard();
+            break;
+        case 'p':
+            leader_p_pending = true;
+            show_whichkey_popup = true;
+            set_info_msg("Paste [Space-p]: [p] Full Replace from Clipboard  [v] Paste from Clipboard  [Esc] Cancel");
+            return;
         case 'w':
             if (buf.save_to_file("")) {
                 save_window_position(win, buf);
@@ -3474,6 +3621,26 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
         }
     }
 
+    // Leader key WhichKey trigger in Visual mode
+    if (key == ' ') {
+        leader_pending = true;
+        ctrl_w_pending = false;
+        show_whichkey_popup = false;
+        whichkey_mode = WhichKeyMode::LEADER;
+        leader_start_time = std::chrono::steady_clock::now();
+        return;
+    }
+
+    if (key == 23 || is_ctrl(ni, key, 'w')) {
+        ctrl_w_pending = true;
+        leader_pending = false;
+        ctrl_w_start_time = std::chrono::steady_clock::now();
+        show_whichkey_popup = true;
+        whichkey_mode = WhichKeyMode::WINDOW;
+        set_info_msg("Window [Ctrl-w]: [q] Close  [v] V-Split  [s] H-Split  [w] Next");
+        return;
+    }
+
     if (key == ':' || ni.id == ':' || (ni.utf8[0] == ':' && ni.utf8[1] == '\0') ||
         (ni.shift && (key == ';' || ni.id == ';'))) {
         mode = Mode::COMMAND;
@@ -4175,6 +4342,23 @@ void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
+    // Ctrl-Shift-V paste into command buffer
+    if (Keymap::is_ctrl_shift(ni, key, 'v')) {
+        std::string clip = get_system_clipboard();
+        if (!clip.empty()) {
+            std::string flat;
+            for (char c : clip) {
+                if (c == '\r' || c == '\n') break;
+                flat += c;
+            }
+            if (!flat.empty()) {
+                cmd_buffer.insert(cmd_cursor_pos, flat);
+                cmd_cursor_pos += static_cast<int>(flat.size());
+            }
+        }
+        return;
+    }
+
     // Kill to start of line: Ctrl-U
     if (is_ctrl(ni, key, 'u')) {
         if (cmd_cursor_pos > 0) {
@@ -4816,6 +5000,759 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         win.deduplicate_cursors();
         update_autocomplete_after_edit();
     }
+}
+
+static const char B64_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static std::string base64_encode(const std::string& in) {
+    std::string out;
+    size_t len = in.size();
+    out.reserve(((len + 2) / 3) * 4);
+
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t b = (static_cast<uint8_t>(in[i])) << 16;
+        if (i + 1 < len) b |= (static_cast<uint8_t>(in[i + 1])) << 8;
+        if (i + 2 < len) b |= static_cast<uint8_t>(in[i + 2]);
+
+        out.push_back(B64_CHARS[(b >> 18) & 0x3F]);
+        out.push_back(B64_CHARS[(b >> 12) & 0x3F]);
+        out.push_back((i + 1 < len) ? B64_CHARS[(b >> 6) & 0x3F] : '=');
+        out.push_back((i + 2 < len) ? B64_CHARS[b & 0x3F] : '=');
+    }
+    return out;
+}
+
+static std::string base64_decode(const std::string& in) {
+    std::string out;
+    out.reserve(in.size() * 3 / 4);
+    uint32_t buf = 0;
+    int bits = 0;
+
+    for (unsigned char c : in) {
+        int v = -1;
+        if (c >= 'A' && c <= 'Z') v = c - 'A';
+        else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+        else if (c >= '0' && c <= '9') v = c - '0' + 52;
+        else if (c == '+') v = 62;
+        else if (c == '/') v = 63;
+        else if (c == '=') break;
+        else continue; // Ignore newlines, spaces, or tmux wrapping
+
+        buf = (buf << 6) | static_cast<uint32_t>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((buf >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+static void osc52_copy(const std::string& text) {
+    if (text.empty()) return;
+    std::string b64 = base64_encode(text);
+
+    std::string seq;
+    const char* tmux = std::getenv("TMUX");
+    const char* term = std::getenv("TERM");
+    bool in_tmux = (tmux != nullptr) || (term && strstr(term, "tmux") != nullptr);
+    bool in_screen = (term && strstr(term, "screen") != nullptr && !in_tmux);
+
+    if (in_tmux) {
+        seq = "\033Ptmux;\033\033]52;c;" + b64 + "\007\033\\";
+    } else if (in_screen) {
+        seq = "\033P\033]52;c;" + b64 + "\007\033\\";
+    } else {
+        seq = "\033]52;c;" + b64 + "\007";
+    }
+
+#ifndef _WIN32
+    int fd = open("/dev/tty", O_WRONLY | O_NOCTTY);
+    if (fd >= 0) {
+        ssize_t written = 0;
+        while (written < static_cast<ssize_t>(seq.size())) {
+            ssize_t n = write(fd, seq.data() + written, seq.size() - written);
+            if (n <= 0) break;
+            written += n;
+        }
+        close(fd);
+        return;
+    }
+#endif
+    printf("%s", seq.c_str());
+    fflush(stdout);
+}
+
+static std::string read_osc52_clipboard() {
+#ifndef _WIN32
+    int fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) return "";
+
+    std::string query;
+    const char* tmux = std::getenv("TMUX");
+    const char* term = std::getenv("TERM");
+    bool in_tmux = (tmux != nullptr) || (term && strstr(term, "tmux") != nullptr);
+    bool in_screen = (term && strstr(term, "screen") != nullptr && !in_tmux);
+
+    if (in_tmux) {
+        query = "\033Ptmux;\033\033]52;c;?\007\033\\";
+    } else if (in_screen) {
+        query = "\033P\033]52;c;?\007\033\\";
+    } else {
+        query = "\033]52;c;?\007";
+    }
+
+    if (write(fd, query.data(), query.size()) <= 0) {
+        close(fd);
+        return "";
+    }
+
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+
+    // The terminal may take a while to answer, and a large clipboard arrives
+    // in many chunks. The old 50ms wait plus a 10 x 4KB read cap truncated the
+    // reply, so only the first part of the clipboard (a few lines) was decoded
+    // and pasted. Wait for the real terminator with an overall deadline.
+    int ret = poll(&pfd, 1, 500);
+    if (ret <= 0 || !(pfd.revents & POLLIN)) {
+        close(fd);
+        return "";
+    }
+
+    std::string resp;
+    char buf[65536];
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < deadline) {
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n > 0) {
+            resp.append(buf, n);
+            // Only look for the terminator after the OSC 52 data start
+            size_t osc = resp.find("]52;");
+            if (osc != std::string::npos) {
+                size_t semi = resp.find(';', osc + 4);
+                if (semi != std::string::npos &&
+                    resp.find_first_of("\007\033", semi + 1) != std::string::npos) {
+                    break;
+                }
+            }
+        } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            pfd.revents = 0;
+            if (poll(&pfd, 1, 100) <= 0) break;
+        } else {
+            break;
+        }
+    }
+    close(fd);
+
+    if (resp.empty()) return "";
+
+    size_t osc_pos = resp.find("]52;");
+    if (osc_pos == std::string::npos) return "";
+
+    size_t second_semi = resp.find(';', osc_pos + 4);
+    if (second_semi == std::string::npos) return "";
+
+    size_t data_start = second_semi + 1;
+    size_t data_end = resp.find_first_of("\007\033", data_start);
+    if (data_end == std::string::npos) {
+        data_end = resp.size();
+    }
+
+    std::string b64 = resp.substr(data_start, data_end - data_start);
+    if (b64 == "?" || b64.empty()) return "";
+
+    return base64_decode(b64);
+#else
+    return "";
+#endif
+}
+
+void VimEngine::copy_to_system_clipboard(const std::string& text) {
+    if (text.empty()) return;
+    // 1. Broadcast via OSC 52
+    osc52_copy(text);
+
+    // 2. Local OS tool mirror
+#ifdef __APPLE__
+    FILE* fp = popen("pbcopy 2>/dev/null", "w");
+    if (fp) {
+        fwrite(text.data(), 1, text.size(), fp);
+        pclose(fp);
+    }
+#elif defined(_WIN32)
+    if (OpenClipboard(nullptr)) {
+        EmptyClipboard();
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+        if (wlen > 0) {
+            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wlen * sizeof(wchar_t));
+            if (hMem) {
+                wchar_t* pMem = static_cast<wchar_t*>(GlobalLock(hMem));
+                if (pMem) {
+                    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, pMem, wlen);
+                    GlobalUnlock(hMem);
+                    SetClipboardData(CF_UNICODETEXT, hMem);
+                } else {
+                    GlobalFree(hMem);
+                }
+            }
+        }
+        CloseClipboard();
+    }
+#elif !defined(_WIN32)
+    const char* wayland = std::getenv("WAYLAND_DISPLAY");
+    const char* cmd1 = (wayland && *wayland != '\0') ? "wl-copy 2>/dev/null" : "xclip -selection clipboard 2>/dev/null";
+    const char* cmd2 = (wayland && *wayland != '\0') ? "xclip -selection clipboard 2>/dev/null" : "xsel --clipboard --input 2>/dev/null";
+    FILE* fp = popen(cmd1, "w");
+    bool ok = false;
+    if (fp) {
+        fwrite(text.data(), 1, text.size(), fp);
+        ok = (pclose(fp) == 0);
+    }
+    if (!ok) {
+        FILE* fp2 = popen(cmd2, "w");
+        if (fp2) {
+            fwrite(text.data(), 1, text.size(), fp2);
+            pclose(fp2);
+        }
+    }
+#endif
+}
+
+std::string VimEngine::get_system_clipboard() {
+    // 1. Try local desktop clipboard tools first (bypasses Kitty terminal prompts)
+#ifdef __APPLE__
+    FILE* fp = popen("pbpaste 2>/dev/null", "r");
+    if (fp) {
+        std::string out;
+        char buf[4096];
+        while (fgets(buf, sizeof(buf), fp)) {
+            out += buf;
+        }
+        int status = pclose(fp);
+        if (status == 0 && !out.empty()) {
+            return out;
+        }
+    }
+#elif defined(_WIN32)
+    if (OpenClipboard(nullptr)) {
+        HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+        if (hData) {
+            wchar_t* pszText = static_cast<wchar_t*>(GlobalLock(hData));
+            if (pszText) {
+                int len = WideCharToMultiByte(CP_UTF8, 0, pszText, -1, nullptr, 0, nullptr, nullptr);
+                std::string res;
+                if (len > 0) {
+                    res.resize(len - 1);
+                    WideCharToMultiByte(CP_UTF8, 0, pszText, -1, &res[0], len, nullptr, nullptr);
+                }
+                GlobalUnlock(hData);
+                CloseClipboard();
+                return res;
+            }
+        }
+        CloseClipboard();
+    }
+#else
+    const char* wayland = std::getenv("WAYLAND_DISPLAY");
+    std::vector<std::string> cmds;
+    if (wayland && *wayland != '\0') {
+        cmds.push_back("wl-paste --no-newline 2>/dev/null");
+        cmds.push_back("xclip -selection clipboard -o 2>/dev/null");
+        cmds.push_back("xsel --clipboard --output 2>/dev/null");
+    } else {
+        cmds.push_back("xclip -selection clipboard -o 2>/dev/null");
+        cmds.push_back("xsel --clipboard --output 2>/dev/null");
+        cmds.push_back("wl-paste --no-newline 2>/dev/null");
+    }
+
+    for (const auto& cmd : cmds) {
+        FILE* pfp = popen(cmd.c_str(), "r");
+        if (pfp) {
+            std::string out;
+            char buf[4096];
+            while (fgets(buf, sizeof(buf), pfp)) {
+                out += buf;
+            }
+            int status = pclose(pfp);
+            if (status == 0 && !out.empty()) {
+                return out;
+            }
+        }
+    }
+#endif
+
+    // 2. Over SSH / remote sessions, query terminal host via OSC 52
+    const char* ssh = std::getenv("SSH_CLIENT");
+    const char* ssh_tty = std::getenv("SSH_TTY");
+    if (ssh || ssh_tty) {
+        std::string osc_clip = read_osc52_clipboard();
+        if (!osc_clip.empty()) {
+            return osc_clip;
+        }
+    }
+
+    // 3. Fallback to internal yank register
+    if (!yank_reg.text.empty()) {
+        return yank_reg.text;
+    }
+    return "";
+}
+
+bool VimEngine::handle_bracketed_paste_fast() {
+    // Check if \033 is followed by [ 2 0 0 ~ in the Notcurses queue.
+    // A zero timeout here was racy: when the terminal delivered the paste in
+    // chunks, the header check failed and the pasted text was then processed
+    // key by key (auto-indent on every Enter and a render per key, which is
+    // very slow). Wait briefly for each byte of the escape sequence instead.
+    struct timespec poll_zero = {0, 50000000L}; // 50ms per escape-sequence byte
+    ncinput n2, n3, n4, n5, n6;
+    uint32_t k2 = notcurses_get(nc, &poll_zero, &n2);
+    if (k2 == 0 || k2 == (uint32_t)-1) return false;
+    if (k2 != '[' && n2.id != '[') return false;
+
+    uint32_t k3 = notcurses_get(nc, &poll_zero, &n3);
+    if (k3 != '2' && n3.id != '2') return false;
+
+    uint32_t k4 = notcurses_get(nc, &poll_zero, &n4);
+    if (k4 != '0' && n4.id != '0') return false;
+
+    uint32_t k5 = notcurses_get(nc, &poll_zero, &n5);
+    if (k5 != '0' && n5.id != '0') return false;
+
+    uint32_t k6 = notcurses_get(nc, &poll_zero, &n6);
+    if (k6 != '~' && n6.id != '~') return false;
+
+    // Flush/drain all characters until the end marker \033[201~ without rendering!
+    std::string stream_text;
+    bool found_end = false;
+
+    while (!found_end && running) {
+        // Large pastes over slow terminals or SSH can stall between chunks.
+        // A short timeout ended the paste early and the rest was replayed as
+        // typed input, which caused the indent mess and the slowdown.
+        struct timespec wait_ts = {1, 0}; // 1s max between chunks
+        ncinput pi;
+        uint32_t pk = notcurses_get(nc, &wait_ts, &pi);
+        if (pk == 0 || pk == (uint32_t)-1) break;
+
+        if (pk == NCKEY_ESC || pi.id == NCKEY_ESC || pk == 27) {
+            ncinput e2, e3, e4, e5, e6;
+            uint32_t ek2 = notcurses_get(nc, &poll_zero, &e2);
+            if (ek2 == '[' || e2.id == '[') {
+                uint32_t ek3 = notcurses_get(nc, &poll_zero, &e3);
+                if (ek3 == '2' || e3.id == '2') {
+                    uint32_t ek4 = notcurses_get(nc, &poll_zero, &e4);
+                    if (ek4 == '0' || e4.id == '0') {
+                        uint32_t ek5 = notcurses_get(nc, &poll_zero, &e5);
+                        if (ek5 == '1' || e5.id == '1') {
+                            uint32_t ek6 = notcurses_get(nc, &poll_zero, &e6);
+                            if (ek6 == '~' || e6.id == '~') {
+                                found_end = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            stream_text += '\x1b';
+            continue;
+        }
+
+        if (pk == '\n' || pk == '\r' || pi.id == '\n' || pi.id == '\r' || pk == NCKEY_ENTER) {
+            stream_text += '\n';
+            continue;
+        }
+        if (pk == '\t' || pi.id == '\t' || pk == NCKEY_TAB) {
+            stream_text += '\t';
+            continue;
+        }
+
+        std::string ch = Keymap::get_input_text(pi, pk);
+        if (!ch.empty()) {
+            stream_text += ch;
+        } else if (pk >= 32 && pk < 127) {
+            stream_text += static_cast<char>(pk);
+        }
+    }
+
+    // If stream reading captured the text, insert it at once!
+    // Otherwise fallback to system clipboard in one shot.
+    if (!stream_text.empty()) {
+        paste_text_raw(stream_text);
+    } else {
+        paste_from_clipboard(true);
+    }
+
+    return true;
+}
+
+bool VimEngine::handle_paste_burst(const ncinput& first_ni, uint32_t first_key) {
+    if (mode != Mode::INSERT) return false;
+
+    // Appends the key's text to `out` and returns true if it is plain text input.
+    auto text_of = [](const ncinput& i, uint32_t k, std::string& out) -> bool {
+        if (i.ctrl || i.alt) return false;
+        if (k == NCKEY_ENTER || k == '\n' || k == '\r') { out += '\n'; return true; }
+        if (k == '\t' || k == NCKEY_TAB) { out += '\t'; return true; }
+        if (k == NCKEY_ESC || k == 27) return false;
+        if (i.shift) {
+            uint32_t raw = (k >= 32 && k < 127) ? k : i.id;
+            if (raw >= 32 && raw < 127) {
+                k = static_cast<uint32_t>(Keymap::get_shifted_ascii(static_cast<char>(raw)));
+            }
+        }
+        if (nckey_synthesized_p(k)) return false;
+        std::string ch = Keymap::get_input_text(i, k);
+        if (ch.empty()) return false;
+        out += ch;
+        return true;
+    };
+
+    std::string text;
+    if (!text_of(first_ni, first_key, text)) return false;
+
+    struct Pending { ncinput ni; uint32_t key; };
+    std::vector<Pending> batch;
+    batch.push_back({first_ni, first_key});
+
+    bool have_leftover = false;
+    Pending leftover{};
+    bool bursting = false;
+
+    while (true) {
+        // Short wait for the first follow-up key (keeps normal typing snappy),
+        // longer wait once a burst has started (slow terminals / SSH chunks).
+        struct timespec wait_ts = {0, bursting ? 30000000L : 2000000L};
+        ncinput ni2{};
+        uint32_t k2 = notcurses_get(nc, &wait_ts, &ni2);
+        if (k2 == 0 || k2 == (uint32_t)-1) break;
+        if (ni2.evtype == NCTYPE_RELEASE) continue;
+        if (Keymap::is_modifier_key(k2)) continue;
+
+        if (text_of(ni2, k2, text)) {
+            batch.push_back({ni2, k2});
+            bursting = true;
+        } else {
+            leftover = {ni2, k2};
+            have_leftover = true;
+            break;
+        }
+    }
+
+    if (batch.size() >= 3) {
+        // Real paste: raw insert, no per-line auto-indent, single syntax update.
+        paste_text_raw(text);
+    } else {
+        // Ordinary typing: replay keys normally.
+        for (const auto& p : batch) {
+            handle_key_input(p.ni, p.key);
+        }
+    }
+
+    if (have_leftover) {
+        handle_key_input(leftover.ni, leftover.key);
+    }
+    return true;
+}
+
+void VimEngine::copy_selection_to_clipboard() {
+    auto& win = active_win();
+    auto& buf = active_buf();
+
+    if (mode == Mode::VISUAL_BLOCK) {
+        Cursor primary = win.cursors.front();
+        yank_reg.lines.clear();
+        yank_reg.text.clear();
+        yank_reg.is_linewise = false;
+        int min_y = std::min(win.visual_anchor.y, primary.y);
+        int max_y = std::max(win.visual_anchor.y, primary.y);
+        int min_x = std::min(win.visual_anchor.x, primary.x);
+        int max_x = std::max(win.visual_anchor.x, primary.x);
+        for (int y = min_y; y <= max_y && y < static_cast<int>(buf.lines.size()); ++y) {
+            std::string& l = buf.lines[y];
+            if (min_x < static_cast<int>(l.size())) {
+                int count = std::min(max_x - min_x + 1, static_cast<int>(l.size()) - min_x);
+                std::string part = l.substr(min_x, count);
+                yank_reg.lines.push_back(part);
+                yank_reg.text += part + "\n";
+            } else {
+                yank_reg.lines.push_back("");
+                yank_reg.text += "\n";
+            }
+        }
+        copy_to_system_clipboard(yank_reg.text);
+        mode = Mode::NORMAL;
+        win.clamp_all_cursors(buf, mode);
+        set_info_msg("Block copied to system clipboard via OSC 52 (" + std::to_string(yank_reg.text.size()) + " chars) [<Space>y].");
+        return;
+    } else if (mode == Mode::VISUAL) {
+        Cursor primary = win.cursors.front();
+        yank_reg.lines.clear();
+        yank_reg.text.clear();
+        yank_reg.is_linewise = false;
+        Cursor start = std::min(win.visual_anchor, primary);
+        Cursor end = std::max(win.visual_anchor, primary);
+        if (start.y == end.y) {
+            if (start.y < static_cast<int>(buf.lines.size())) {
+                std::string& l = buf.lines[start.y];
+                int count = std::min(end.x - start.x + 1, static_cast<int>(l.size()) - start.x);
+                if (count > 0 && start.x < static_cast<int>(l.size())) {
+                    yank_reg.text = l.substr(start.x, count);
+                    yank_reg.lines = {yank_reg.text};
+                }
+            }
+        } else {
+            for (int y = start.y; y <= end.y && y < static_cast<int>(buf.lines.size()); ++y) {
+                std::string& l = buf.lines[y];
+                if (y == start.y) {
+                    std::string part = (start.x < static_cast<int>(l.size())) ? l.substr(start.x) : "";
+                    yank_reg.lines.push_back(part);
+                    yank_reg.text += part + "\n";
+                } else if (y == end.y) {
+                    int count = std::min(end.x + 1, static_cast<int>(l.size()));
+                    std::string part = l.substr(0, count);
+                    yank_reg.lines.push_back(part);
+                    yank_reg.text += part;
+                } else {
+                    yank_reg.lines.push_back(l);
+                    yank_reg.text += l + "\n";
+                }
+            }
+        }
+        copy_to_system_clipboard(yank_reg.text);
+        mode = Mode::NORMAL;
+        win.clamp_all_cursors(buf, mode);
+        set_info_msg("Selection copied to system clipboard via OSC 52 (" + std::to_string(yank_reg.text.size()) + " chars) [<Space>y].");
+        return;
+    }
+
+    // Normal mode: copy current line
+    Cursor primary = win.cursors.front();
+    if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+        std::string line = buf.lines[primary.y];
+        yank_reg.is_linewise = true;
+        yank_reg.lines = {line};
+        yank_reg.text = line + "\n";
+        copy_to_system_clipboard(yank_reg.text);
+        set_info_msg("Line copied to system clipboard via OSC 52 [<Space>y].");
+    } else if (!yank_reg.text.empty()) {
+        copy_to_system_clipboard(yank_reg.text);
+        set_info_msg("Copied internal buffer to system clipboard via OSC 52 [<Space>y].");
+    } else {
+        set_info_msg("Nothing to copy.");
+    }
+}
+
+void VimEngine::paste_full_replace() {
+    std::string clip = get_system_clipboard();
+    if (clip.empty()) {
+        set_info_msg("Clipboard is empty.");
+        return;
+    }
+
+    auto& win = active_win();
+    auto& buf = active_buf();
+
+    buf.push_undo(win.cursors);
+
+    std::vector<std::string> new_lines;
+    std::string cur;
+    for (size_t i = 0; i < clip.size(); ++i) {
+        if (clip[i] == '\r') {
+            if (i + 1 < clip.size() && clip[i + 1] == '\n') continue;
+            new_lines.push_back(cur);
+            cur.clear();
+        } else if (clip[i] == '\n') {
+            new_lines.push_back(cur);
+            cur.clear();
+        } else {
+            cur += clip[i];
+        }
+    }
+    if (!cur.empty() || new_lines.empty()) {
+        new_lines.push_back(cur);
+    }
+
+    buf.lines = std::move(new_lines);
+    buf.modified = true;
+    buf.version++;
+    buf.invalidate_hunks();
+    if (buf.syntax) buf.syntax->update_text(buf.lines);
+
+    // Every window showing this buffer must be reset, otherwise split windows
+    // keep cursors/scroll positions from the old (shorter or longer) content.
+    for (auto& w : windows) {
+        if (w.buffer_idx == active_win().buffer_idx) {
+            w.cursors = {{0, 0}};
+            w.scroll_y = 0;
+            w.scroll_x = 0;
+            w.clamp_all_cursors(buf, mode);
+        }
+    }
+    update_window_scroll(win, buf);
+
+    yank_reg.text = clip;
+    yank_reg.lines = buf.lines;
+    yank_reg.is_linewise = true;
+
+    set_info_msg("Buffer replaced from clipboard (" + std::to_string(buf.lines.size()) + " lines) [<Space>pp].");
+}
+
+void VimEngine::paste_text_raw(const std::string& text) {
+    if (text.empty()) return;
+
+    if (mode == Mode::COMMAND) {
+        std::string flat;
+        for (char c : text) {
+            if (c == '\r' || c == '\n') break;
+            flat += c;
+        }
+        cmd_buffer.insert(cmd_cursor_pos, flat);
+        cmd_cursor_pos += static_cast<int>(flat.size());
+        return;
+    }
+
+    auto& win = active_win();
+    auto& buf = active_buf();
+
+    buf.push_undo(win.cursors);
+
+    std::vector<std::string> clip_lines;
+    std::string cur;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\r') {
+            if (i + 1 < text.size() && text[i + 1] == '\n') continue;
+            clip_lines.push_back(cur);
+            cur.clear();
+        } else if (text[i] == '\n') {
+            clip_lines.push_back(cur);
+            cur.clear();
+        } else {
+            cur += text[i];
+        }
+    }
+    if (!cur.empty() || clip_lines.empty()) {
+        clip_lines.push_back(cur);
+    }
+
+    yank_reg.text = text;
+    yank_reg.lines = clip_lines;
+    yank_reg.is_linewise = (!text.empty() && text.back() == '\n');
+
+    Mode prev_mode = mode;
+
+    if (mode == Mode::VISUAL_BLOCK) {
+        Cursor primary = win.cursors.front();
+        int min_y = std::min(win.visual_anchor.y, primary.y);
+        int max_y = std::max(win.visual_anchor.y, primary.y);
+        int min_x = std::min(win.visual_anchor.x, primary.x);
+        int max_x = std::max(win.visual_anchor.x, primary.x);
+
+        for (int y = min_y; y <= max_y && y < static_cast<int>(buf.lines.size()); ++y) {
+            std::string& l = buf.lines[y];
+            if (min_x < static_cast<int>(l.size())) {
+                int count = std::min(max_x - min_x + 1, static_cast<int>(l.size()) - min_x);
+                l.erase(min_x, count);
+            }
+        }
+        win.cursors = {{min_y, min_x}};
+        mode = Mode::NORMAL;
+    } else if (mode == Mode::VISUAL) {
+        Cursor primary = win.cursors.front();
+        Cursor start = std::min(win.visual_anchor, primary);
+        Cursor end = std::max(win.visual_anchor, primary);
+        if (start.y == end.y) {
+            if (start.y < static_cast<int>(buf.lines.size())) {
+                int count = std::min(end.x - start.x + 1, static_cast<int>(buf.lines[start.y].size()) - start.x);
+                buf.lines[start.y].erase(start.x, count);
+            }
+        } else {
+            if (start.y < static_cast<int>(buf.lines.size())) {
+                buf.lines[start.y].erase(start.x);
+                std::string rest = (end.y < static_cast<int>(buf.lines.size()) &&
+                                    end.x + 1 < static_cast<int>(buf.lines[end.y].size())) ?
+                    buf.lines[end.y].substr(end.x + 1) : "";
+                buf.lines[start.y] += rest;
+                int del_count = end.y - start.y;
+                int avail = static_cast<int>(buf.lines.size()) - (start.y + 1);
+                int actual_del = std::min(del_count, avail);
+                if (actual_del > 0) {
+                    buf.lines.erase(buf.lines.begin() + start.y + 1, buf.lines.begin() + start.y + 1 + actual_del);
+                }
+            }
+        }
+        win.cursors = {start};
+        mode = Mode::NORMAL;
+    }
+
+    if (buf.lines.empty()) {
+        buf.lines.push_back("");
+    }
+
+    if (win.cursors.empty()) win.cursors = {{0, 0}};
+
+    if (clip_lines.size() == 1) {
+        const std::string& line_content = clip_lines[0];
+        for (auto& c : win.cursors) {
+            c.y = std::clamp(c.y, 0, static_cast<int>(buf.lines.size()) - 1);
+            std::string& line = buf.lines[c.y];
+            int ins_pos = std::clamp(c.x, 0, static_cast<int>(line.size()));
+            line.insert(ins_pos, line_content);
+            c.x = ins_pos + static_cast<int>(line_content.size());
+        }
+    } else {
+        Cursor& c = win.cursors.front();
+        c.y = std::clamp(c.y, 0, static_cast<int>(buf.lines.size()) - 1);
+        std::string cur_line = buf.lines[c.y];
+        int ins_pos = std::clamp(c.x, 0, static_cast<int>(cur_line.size()));
+
+        std::string before = cur_line.substr(0, ins_pos);
+        std::string after = cur_line.substr(ins_pos);
+
+        buf.lines[c.y] = before + clip_lines[0];
+
+        int insert_y = c.y + 1;
+        for (size_t i = 1; i + 1 < clip_lines.size(); ++i) {
+            buf.lines.insert(buf.lines.begin() + insert_y, clip_lines[i]);
+            insert_y++;
+        }
+
+        std::string last_line = clip_lines.back() + after;
+        buf.lines.insert(buf.lines.begin() + insert_y, last_line);
+
+        int new_cy = insert_y;
+        int new_cx = static_cast<int>(clip_lines.back().size());
+        win.cursors = {{new_cy, new_cx}};
+    }
+
+    buf.modified = true;
+    buf.version++;
+    buf.invalidate_hunks();
+    if (buf.syntax) buf.syntax->update_text(buf.lines);
+
+    if (prev_mode == Mode::INSERT) {
+        mode = Mode::INSERT;
+    }
+
+    win.clamp_all_cursors(buf, mode);
+    win.deduplicate_cursors();
+    update_window_scroll(win, buf);
+
+    set_info_msg("Pasted " + std::to_string(clip_lines.size()) +
+                 (clip_lines.size() == 1 ? " line" : " lines") + ".");
+}
+
+void VimEngine::paste_from_clipboard(bool bracket_paste) {
+    (void)bracket_paste;
+    std::string clip = get_system_clipboard();
+    if (clip.empty()) {
+        set_info_msg("Clipboard is empty.");
+        return;
+    }
+    paste_text_raw(clip);
 }
 
 void VimEngine::scan_themes() {

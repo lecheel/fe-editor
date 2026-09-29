@@ -215,6 +215,10 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     }
     stdplane = notcurses_stdplane(nc);
 
+    // Turn on terminal bracketed paste mode (DEC 2004) so Kitty/xterm never prompt
+    printf("\033[?2004h");
+    fflush(stdout);
+
     bool restored_ws = false;
     if (file_targets.empty() && !no_ws && !delta_mode) {
         WorkspaceStorage storage(config.get_config_dir());
@@ -243,6 +247,10 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   [Space]         Leader key (opens WhichKey popup in bottom-right after 300ms)",
             "//   [Space] f       File finder / picker (instant without popup if typed fast)",
             "//   [Space] g       Ripgrep word on cursor (or :vg <pattern>)",
+            "//   [Space] y       Copy line/selection to system clipboard (OSC 52)",
+            "//   [Space] pp      Full replace paste from clipboard (OSC 52)",
+            "//   [Space] pv      Paste from clipboard at cursor (OSC 52)",
+            "//   [Ctrl-Shift-V]  OS bracket paste from system clipboard",
             "//   [Space] w       Save buffer",
             "//   [Space] q       Quit (or :q / :q!)",
             "//   [Alt-b]         Buffer list popup (or :ls / :buffers)",
@@ -428,6 +436,11 @@ VimEngine::~VimEngine() {
     config.save();
     LOGD("VimEngine shutting down");
     if (nc) notcurses_stop(nc);
+
+    // Turn off terminal bracketed paste mode
+    printf("\033[?2004l");
+    fflush(stdout);
+
     Log::shutdown();
 }
 
@@ -550,7 +563,7 @@ void VimEngine::run() {
         ncinput ni;
         uint32_t key = 0;
 
-        if ((leader_pending || ctrl_w_pending) && !show_whichkey_popup) {
+        if ((leader_pending || ctrl_w_pending || leader_p_pending) && !show_whichkey_popup) {
             auto now = std::chrono::steady_clock::now();
             auto start_t = ctrl_w_pending ? ctrl_w_start_time : leader_start_time;
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_t).count();
@@ -598,8 +611,24 @@ void VimEngine::run() {
             continue;
         }
 
+        // Instantly catch terminal bracketed paste start \033[200~
+        if (key == NCKEY_ESC || ni.id == NCKEY_ESC || key == 27) {
+            if (handle_bracketed_paste_fast()) {
+                continue;
+            }
+        }
+
         LOGD("run() key=%u id=%u utf8=%02x %02x ctrl=%d alt=%d shift=%d mode=%d",
              key, ni.id, (unsigned)ni.utf8[0], (unsigned)ni.utf8[1], ni.ctrl, ni.alt, ni.shift, (int)mode);
+
+        // Notcurses consumes the \033[200~ / \033[201~ bracketed-paste markers
+        // itself, so the ESC based detection never fires and the paste arrives
+        // as individual key events. Each Enter then auto-indents and each key
+        // triggers a render (the staircase indent and the 60s for 500 lines).
+        // Detect a burst of queued text keys and insert it in one shot instead.
+        if (handle_paste_burst(ni, key)) {
+            continue;
+        }
 
         handle_key_input(ni, key);
     }

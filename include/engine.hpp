@@ -27,6 +27,8 @@ public:
     int workspace_slot{-1};      // Session-local active workspace slot (0..4, or -1)
     bool workspace_active{false}; // True if session has adopted an active workspace
 
+    Mode get_mode() const { return mode; }
+
     explicit VimEngine(bool verbose = false, const std::vector<std::string>& files = {});
     ~VimEngine();
 
@@ -147,6 +149,7 @@ private:
     };
     WhichKeyMode whichkey_mode{WhichKeyMode::LEADER};
     bool leader_pending{false};
+    bool leader_p_pending{false};
     bool ctrl_w_pending{false};
     bool show_whichkey_popup{false};
     std::chrono::steady_clock::time_point leader_start_time;
@@ -305,6 +308,15 @@ public:
     void handle_key_input(const ncinput& ni, uint32_t key);
     bool handle_global_shortcuts(const ncinput& ni, uint32_t key);
     bool handle_navigation(const ncinput& ni, uint32_t key);
+    void copy_to_system_clipboard(const std::string& text);
+    std::string get_system_clipboard();
+    void copy_selection_to_clipboard();
+    void paste_text_raw(const std::string& text);
+    void paste_from_clipboard(bool bracket_paste = true);
+    void paste_full_replace();
+    bool handle_bracketed_paste_fast();
+    bool handle_paste_burst(const ncinput& ni, uint32_t key);
+
     void handle_normal_mode(const ncinput& ni, uint32_t key);
     void handle_visual_mode(const ncinput& ni, uint32_t key);
     void trigger_cmd_completion();
