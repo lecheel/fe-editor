@@ -1077,14 +1077,16 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     char disp_sign = (g_hunk_marker_style == 1 && git_sign != ' ') ? '|' : git_sign;
                     char sign_buf[3] = {disp_sign, ' ', '\0'};
                     ncplane_putstr_yx(stdplane, draw_y, win.x + gutter_w - 2, sign_buf);
-                } else {
-                    ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
-                    std::string tilde;
-                    for (int sp = 0; sp < std::max(0, gutter_w - 2); ++sp) tilde += " ";
-                    tilde += "~ ";
-                    ncplane_putstr_yx(stdplane, draw_y, win.x, tilde.c_str());
-                }
+        } else {
+            ncplane_set_bg_rgb8(stdplane, ui_bg.bg.r, ui_bg.bg.g, ui_bg.bg.b);
+            ncplane_set_fg_rgb8(stdplane, 70, 70, 70);
+            std::string tilde;
+            for (int sp = 0; sp < std::max(0, gutter_w - 2); ++sp) tilde += " ";
+            tilde += "~ ";
+            ncplane_putstr_yx(stdplane, draw_y, win.x, tilde.c_str());
+        }
             } else {
+                ncplane_set_bg_rgb8(stdplane, ui_bg.bg.r, ui_bg.bg.g, ui_bg.bg.b);
                 if (git_sign == '+') {
                     ncplane_set_fg_rgb8(stdplane, plus_col.r, plus_col.g, plus_col.b);
                 } else if (git_sign == '~') {
@@ -1104,11 +1106,21 @@ void VimEngine::render_window(Window& win, bool is_active) {
         if (text_avail_w <= 0) continue;
 
         if (line_idx < static_cast<int>(buf.lines.size())) {
-            const std::string& line = buf.lines[line_idx];
+            const std::string& full_line = buf.lines[line_idx];
+            // Horizontal scroll: compute byte offset for scroll_x display columns
+            size_t h_byte_start = compute_byte_offset(full_line, win.scroll_x);
+            int h_col_skipped = compute_display_col(full_line, static_cast<int>(h_byte_start));
+            int col_adjust = win.scroll_x - h_col_skipped; // padding for wide char straddling boundary
+            std::string line = (h_byte_start < full_line.size()) ? full_line.substr(h_byte_start) : "";
             std::vector<SyntaxStyle> syn_styles;
             if (buf.syntax) {
-                syn_styles = buf.syntax->get_line_styles(line_idx, line);
+                auto full_styles = buf.syntax->get_line_styles(line_idx, full_line);
+                if (h_byte_start < full_styles.size()) {
+                    syn_styles.assign(full_styles.begin() + h_byte_start, full_styles.end());
+                }
             }
+            // Expose scroll offset for rendering code that follows
+            int scroll_x_off = static_cast<int>(h_byte_start);
 
             std::string ghost_str;
             if (is_active && mode == Mode::INSERT && line_idx == primary.y && win.cursors.size() == 1) {
@@ -1236,16 +1248,17 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     if (cw > 0) char_width = cw;
                 }
 
-                bool has_cursor = cursor_set.count({line_idx, static_cast<int>(byte_idx)});
+                int orig_byte = static_cast<int>(byte_idx) + scroll_x_off;
+                bool has_cursor = cursor_set.count({line_idx, orig_byte});
                 bool in_visual = false;
                 if (is_active) {
                     if (effective_visual_mode == Mode::VISUAL_BLOCK) {
                         if (line_idx >= v_min_y && line_idx <= v_max_y &&
-                            static_cast<int>(byte_idx) >= v_min_x && static_cast<int>(byte_idx) <= v_max_x) {
+                            orig_byte >= v_min_x && orig_byte <= v_max_x) {
                             in_visual = true;
                         }
                     } else if (effective_visual_mode == Mode::VISUAL) {
-                        Cursor cur_pt{line_idx, static_cast<int>(byte_idx)};
+                        Cursor cur_pt{line_idx, orig_byte};
                         Cursor v_start = std::min(win.visual_anchor, primary);
                         Cursor v_end = std::max(win.visual_anchor, primary);
                         if (!(cur_pt < v_start) && !(v_end < cur_pt)) {
@@ -1260,7 +1273,7 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     for (const auto& sr : search_ranges) {
                         if (static_cast<int>(byte_idx) >= sr.first && static_cast<int>(byte_idx) < sr.second) {
                             in_search = true;
-                            if (line_idx == primary.y && sr.first == primary.x) {
+                            if (line_idx == primary.y && sr.first + scroll_x_off == primary.x) {
                                 is_current_search = true;
                             }
                             break;
@@ -1268,7 +1281,7 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     }
                 }
 
-                int screen_col = col_x - win.scroll_x;
+                int screen_col = col_x + col_adjust;
                 if (screen_col >= 0 && screen_col < text_avail_w) {
                     int draw_x = win.x + gutter_w + screen_col;
 
@@ -1300,19 +1313,19 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 col_x += char_width;
             }
 
-            int end_screen_col = col_x - win.scroll_x;
+            int end_screen_col = col_x + col_adjust;
             if (end_screen_col >= 0 && end_screen_col < text_avail_w) {
                 int draw_x = win.x + gutter_w + end_screen_col;
-                bool has_cursor = cursor_set.count({line_idx, static_cast<int>(line.size())});
+                bool has_cursor = cursor_set.count({line_idx, static_cast<int>(full_line.size())});
                 bool in_visual = false;
                 if (is_active) {
                     if (effective_visual_mode == Mode::VISUAL_BLOCK) {
                         if (line_idx >= v_min_y && line_idx <= v_max_y &&
-                            static_cast<int>(line.size()) >= v_min_x && static_cast<int>(line.size()) <= v_max_x) {
+                            static_cast<int>(full_line.size()) >= v_min_x && static_cast<int>(full_line.size()) <= v_max_x) {
                             in_visual = true;
                         }
                     } else if (effective_visual_mode == Mode::VISUAL) {
-                        Cursor cur_pt{line_idx, static_cast<int>(line.size())};
+                        Cursor cur_pt{line_idx, static_cast<int>(full_line.size())};
                         Cursor v_start = std::min(win.visual_anchor, primary);
                         Cursor v_end = std::max(win.visual_anchor, primary);
                         if (!(cur_pt < v_start) && !(v_end < cur_pt)) {

@@ -233,6 +233,8 @@ private:
     static std::string detect_project_dir(const std::string& start_path = "");
 
     int get_line_num_w(const TextBuffer& buf) const;
+    int compute_display_col(const std::string& line, int byte_x) const;
+    size_t compute_byte_offset(const std::string& line, int target_col) const;
 public:
     ConfigManager& get_config() { return config; }
     std::vector<std::shared_ptr<TextBuffer>>& get_buffers() { return buffers; }

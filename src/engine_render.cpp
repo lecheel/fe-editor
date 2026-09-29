@@ -19,6 +19,47 @@ void VimEngine::render_window_separator(int y, unsigned int screen_w, bool is_ac
     ncplane_putstr_yx(stdplane, y, 0, sep.c_str());
 }
 
+int VimEngine::compute_display_col(const std::string& line, int byte_x) const {
+    int col = 0;
+    size_t bi = 0;
+    while (bi < line.size() && static_cast<int>(bi) < byte_x) {
+        unsigned char lead = static_cast<unsigned char>(line[bi]);
+        int clen = Keymap::utf8_char_len(lead);
+        if (bi + clen > line.size()) clen = static_cast<int>(line.size() - bi);
+        int cw = 1;
+        wchar_t wc = 0;
+        mbstate_t mbs = {};
+        if (mbrtowc(&wc, line.data() + bi, clen, &mbs) > 0) {
+            int w = wcwidth(wc);
+            if (w > 0) cw = w;
+        }
+        col += cw;
+        bi += clen;
+    }
+    return col;
+}
+
+size_t VimEngine::compute_byte_offset(const std::string& line, int target_col) const {
+    size_t bi = 0;
+    int col = 0;
+    while (bi < line.size() && col < target_col) {
+        unsigned char lead = static_cast<unsigned char>(line[bi]);
+        int clen = Keymap::utf8_char_len(lead);
+        if (bi + clen > line.size()) clen = static_cast<int>(line.size() - bi);
+        int cw = 1;
+        wchar_t wc = 0;
+        mbstate_t mbs = {};
+        if (mbrtowc(&wc, line.data() + bi, clen, &mbs) > 0) {
+            int w = wcwidth(wc);
+            if (w > 0) cw = w;
+        }
+        if (col + cw > target_col) break;
+        col += cw;
+        bi += clen;
+    }
+    return bi;
+}
+
 void VimEngine::update_window_scroll(Window& win, const TextBuffer& buf) {
     if (win.cursors.empty()) return;
     Cursor primary = win.cursors.front();
@@ -33,6 +74,34 @@ void VimEngine::update_window_scroll(Window& win, const TextBuffer& buf) {
         win.scroll_y = primary.y - win.h + effective_scrolloff + 1;
     }
     win.scroll_y = std::max(0, win.scroll_y);
+
+    // Horizontal scrolling for long lines
+    int gutter_w = get_line_num_w(buf);
+    int text_avail_w = win.w - gutter_w;
+    if (text_avail_w <= 0) return;
+
+    int cursor_col = primary.x;
+    if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+        cursor_col = compute_display_col(buf.lines[primary.y], primary.x);
+    }
+
+    // If the cursor's line fits entirely within the viewport, reset horizontal scroll
+    if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+        int line_disp_w = compute_display_col(buf.lines[primary.y], static_cast<int>(buf.lines[primary.y].size()));
+        if (line_disp_w <= text_avail_w) {
+            win.scroll_x = 0;
+        }
+    }
+
+    int h_scrolloff = std::min(2, text_avail_w > 4 ? text_avail_w / 4 : 0);
+
+    if (cursor_col < win.scroll_x + h_scrolloff) {
+        win.scroll_x = std::max(0, cursor_col - h_scrolloff);
+    }
+    if (cursor_col >= win.scroll_x + text_avail_w - h_scrolloff) {
+        win.scroll_x = cursor_col - text_avail_w + h_scrolloff + 1;
+    }
+    win.scroll_x = std::max(0, win.scroll_x);
 }
 
 void VimEngine::render() {
@@ -95,7 +164,7 @@ void VimEngine::render() {
             }
             int screen_cx = aw.x + gutter_w + cursor_col - aw.scroll_x;
             if (screen_cy >= aw.y && screen_cy < aw.y + aw.h &&
-                screen_cx >= aw.x && screen_cx < aw.x + aw.w) {
+                screen_cx >= aw.x + gutter_w && screen_cx < aw.x + aw.w) {
                 notcurses_cursor_enable(nc, screen_cy, screen_cx);
             } else {
                 notcurses_cursor_disable(nc);
