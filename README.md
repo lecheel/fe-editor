@@ -29,6 +29,15 @@ In standard Vim/Neovim setups, achieving a productive engineering environment re
 - **Zero-Friction Discovery**:  
   Instant execution for fast muscle memory, with an automatic WhichKey discovery popup (`Space`) appearing only when you hesitate.
 
+### Eliminating the "Vim Stutter Tax"
+In traditional Vim, even the smallest micro-correction forces you to pay the mechanical and cognitive **"Vim Stutter Tax"**:
+
+| Action | Traditional Vim | `fe` |
+| :--- | :--- | :--- |
+| **Delete current line** | `Esc` $\rightarrow$ `dd` $\rightarrow$ `i` | `Alt-d` |
+| **Undo last edit** | `Esc` $\rightarrow$ `u` $\rightarrow$ `i` | `Alt-u` |
+| **Save file** | `Esc` $\rightarrow$ `:w` $\rightarrow$ `Enter` $\rightarrow$ `i` | `Space-w` |
+
 ---
 
 ## Highlights
@@ -39,6 +48,13 @@ In standard Vim/Neovim setups, achieving a productive engineering environment re
 - **Seamless OSC 52 & Bracketed Paste**: True clipboard sync across SSH, `tmux`, and desktop environments, paired with DEC 2004 burst suppression to eliminate paste staircasing and rendering lag.
 - **Live In-Memory Git Gutter**: Real-time diff indicators (`+`, `~`, `-`) calculated in memory as you type—no disk saving required.
 - **Helix TOML Themes**: Full support for Helix color schemes with live interactive preview (`F6`).
+
+---
+
+### Multi-Cursor (`C` / `Alt-k`) vs. Column Block (`Ctrl-v`): Taming Ragged Edges
+Visual Block mode (`Ctrl-v`) is built for strict, rectangular columns—ideal for commenting out blocks or editing tabular data. However, real-world code is **ragged**: lines have different lengths, indentations, and token boundaries.
+
+`fe`'s Multi-Cursor mode natively handles these ragged edges. You can spawn cursors across lines with varying indentation and type or delete simultaneously. The engine intelligently aligns your edits to the respective local contexts of each cursor, eliminating the need to manually pad lines with spaces just to force a rectangular block to work.
 
 ---
 
