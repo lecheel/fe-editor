@@ -2374,7 +2374,7 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    const int total_items = 7;
+    const int total_items = 8;
     if (key == NCKEY_UP || key == 'k' || key == 'K') {
         settings_selected_idx = (settings_selected_idx + total_items - 1) % total_items;
     } else if (key == NCKEY_DOWN || key == 'j' || key == 'J') {
@@ -2425,6 +2425,9 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
             }
             case 6:
                 config.settings.hunk_diff_right_syntax = !config.settings.hunk_diff_right_syntax;
+                break;
+            case 7:
+                config.settings.search_wrap = !config.settings.search_wrap;
                 break;
         }
         config.save();

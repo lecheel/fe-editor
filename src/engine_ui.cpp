@@ -1290,7 +1290,7 @@ void VimEngine::render_window(Window& win, bool is_active) {
 void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen_w) {
     int popup_w = std::max(38, static_cast<int>(screen_w * 0.50));
     popup_w = std::min(popup_w, static_cast<int>(screen_w) - 2);
-    int popup_h = 13;
+    int popup_h = 14;
     int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
     int popup_y = std::max(1, (static_cast<int>(screen_h) - popup_h) / 2);
 
@@ -1347,7 +1347,8 @@ void VimEngine::render_settings_popup(unsigned int screen_h, unsigned int screen
         {"Highlight Active", config.settings.highlight_current_line ? "[ ON ]" : "[ OFF ]"},
         {"Hunk Gutter Style", hunk_style_str},
         {"Scroll Clamp Offset", scrolloff_str},
-        {"F5 Right Syntax", config.settings.hunk_diff_right_syntax ? "[ ON ]" : "[ OFF ]"}
+        {"F5 Right Syntax", config.settings.hunk_diff_right_syntax ? "[ ON ]" : "[ OFF ]"},
+        {"Search Wrap", config.settings.search_wrap ? "[ ON ]" : "[ OFF ]"}
     };
 
     for (size_t i = 0; i < items.size(); ++i) {

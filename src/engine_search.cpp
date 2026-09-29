@@ -1223,7 +1223,7 @@ void VimEngine::update_search_incremental() {
         return;
     }
 
-    int target_idx = 0;
+    int target_idx = -1;
     for (size_t i = 0; i < matches.size(); ++i) {
         if (matches[i].line > search_start_cursor.y ||
             (matches[i].line == search_start_cursor.y && matches[i].col >= search_start_cursor.x)) {
@@ -1232,10 +1232,16 @@ void VimEngine::update_search_incremental() {
         }
     }
 
+    if (target_idx == -1 && config.settings.search_wrap) {
+        target_idx = 0;
+    }
+
     search_current_match_idx = target_idx;
-    active_win().cursors = {{matches[target_idx].line, matches[target_idx].col}};
-    active_win().clamp_all_cursors(active_buf(), mode);
-    update_window_scroll(active_win(), active_buf());
+    if (target_idx >= 0) {
+        active_win().cursors = {{matches[target_idx].line, matches[target_idx].col}};
+        active_win().clamp_all_cursors(active_buf(), mode);
+        update_window_scroll(active_win(), active_buf());
+    }
 }
 
 void VimEngine::handle_search_input(const ncinput& ni, uint32_t key) {
@@ -1263,7 +1269,7 @@ void VimEngine::handle_search_input(const ncinput& ni, uint32_t key) {
                 search_current_match_idx = -1;
                 set_info_msg("Pattern not found: " + search_query);
             } else {
-                int target_idx = 0;
+                int target_idx = -1;
                 for (size_t i = 0; i < matches.size(); ++i) {
                     if (matches[i].line > search_start_cursor.y ||
                         (matches[i].line == search_start_cursor.y && matches[i].col >= search_start_cursor.x)) {
@@ -1271,12 +1277,22 @@ void VimEngine::handle_search_input(const ncinput& ni, uint32_t key) {
                         break;
                     }
                 }
-                search_current_match_idx = target_idx;
-                active_win().cursors = {{matches[target_idx].line, matches[target_idx].col}};
-                active_win().clamp_all_cursors(active_buf(), mode);
-                update_window_scroll(active_win(), active_buf());
-                set_info_msg("/" + search_query + " [" + std::to_string(target_idx + 1) + "/" +
-                             std::to_string(search_total_matches) + "]");
+                if (target_idx == -1) {
+                    if (config.settings.search_wrap) {
+                        target_idx = 0;
+                    }
+                }
+                if (target_idx == -1) {
+                    search_current_match_idx = -1;
+                    set_info_msg("Search hit BOTTOM without match (wrap disabled)");
+                } else {
+                    search_current_match_idx = target_idx;
+                    active_win().cursors = {{matches[target_idx].line, matches[target_idx].col}};
+                    active_win().clamp_all_cursors(active_buf(), mode);
+                    update_window_scroll(active_win(), active_buf());
+                    set_info_msg("/" + search_query + " [" + std::to_string(target_idx + 1) + "/" +
+                                 std::to_string(search_total_matches) + "]");
+                }
             }
         } else if (!search_query.empty()) {
             search_highlight_on = true;
@@ -1408,6 +1424,10 @@ void VimEngine::search_jump_next() {
 
     bool wrapped = false;
     if (next_idx == -1) {
+        if (!config.settings.search_wrap) {
+            set_info_msg("Search hit BOTTOM (wrap disabled)");
+            return;
+        }
         next_idx = 0;
         wrapped = true;
     }
@@ -1449,6 +1469,10 @@ void VimEngine::search_jump_prev() {
 
     bool wrapped = false;
     if (prev_idx == -1) {
+        if (!config.settings.search_wrap) {
+            set_info_msg("Search hit TOP (wrap disabled)");
+            return;
+        }
         prev_idx = static_cast<int>(matches.size()) - 1;
         wrapped = true;
     }
