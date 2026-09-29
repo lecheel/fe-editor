@@ -170,6 +170,16 @@ private:
 
     bool show_mini_help{false};
     bool show_filepicker{false};
+    bool filepicker_tree_mode{false};
+    std::string filepicker_cur_dir;
+    struct TreeEntry {
+        std::string name;
+        std::string full_path;
+        bool is_dir{false};
+        bool is_parent{false};
+    };
+    std::vector<TreeEntry> filepicker_tree_entries;
+    std::vector<TreeEntry> filepicker_filtered_tree;
     std::string filepicker_query;
     std::vector<std::string> filepicker_all_files;
     std::vector<std::string> filepicker_filtered_files;
@@ -267,6 +277,7 @@ public:
 
     void open_filepicker();
     void scan_project_files();
+    void scan_filepicker_tree();
     void filter_filepicker_files();
     void handle_filepicker_input(const ncinput& ni, uint32_t key);
     void render_filepicker(unsigned int screen_h, unsigned int screen_w);

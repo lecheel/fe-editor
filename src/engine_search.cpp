@@ -1498,13 +1498,71 @@ void VimEngine::open_filepicker() {
     show_settings_popup = false;
     leader_pending = false;
 
+    filepicker_tree_mode = false;
+    filepicker_cur_dir.clear();
     filepicker_query.clear();
     filepicker_selected_idx = 0;
     filepicker_scroll = 0;
+
     scan_project_files();
+    scan_filepicker_tree();
     filter_filepicker_files();
     show_filepicker = true;
-    set_info_msg("FilePicker: Type to filter, [Enter] open, [Esc] close");
+    set_info_msg("Find File (Tab: Tree)");
+}
+
+void VimEngine::scan_filepicker_tree() {
+    filepicker_tree_entries.clear();
+    std::string root = !project_dir.empty() ? project_dir : ".";
+
+    fs::path dir_to_scan = fs::path(root);
+    if (!filepicker_cur_dir.empty()) {
+        dir_to_scan = fs::path(root) / filepicker_cur_dir;
+    }
+    std::error_code ec;
+    dir_to_scan = dir_to_scan.lexically_normal();
+
+    // Parent entry "../"
+    TreeEntry parent_entry;
+    parent_entry.name = "../";
+    parent_entry.is_dir = true;
+    parent_entry.is_parent = true;
+    parent_entry.full_path = dir_to_scan.parent_path().string();
+    filepicker_tree_entries.push_back(parent_entry);
+
+    std::vector<TreeEntry> dirs;
+    std::vector<TreeEntry> files;
+
+    if (fs::exists(dir_to_scan, ec) && fs::is_directory(dir_to_scan, ec)) {
+        for (const auto& entry : fs::directory_iterator(dir_to_scan, fs::directory_options::skip_permission_denied, ec)) {
+            if (ec) break;
+            std::string fname = entry.path().filename().string();
+            if (fname.empty() || fname == "." || fname == "..") continue;
+
+            bool is_d = entry.is_directory(ec);
+            TreeEntry te;
+            te.name = fname + (is_d ? "/" : "");
+            te.full_path = entry.path().lexically_normal().string();
+            te.is_dir = is_d;
+            te.is_parent = false;
+
+            if (is_d) {
+                dirs.push_back(te);
+            } else {
+                files.push_back(te);
+            }
+        }
+    }
+
+    std::sort(dirs.begin(), dirs.end(), [](const TreeEntry& a, const TreeEntry& b) {
+        return a.name < b.name;
+    });
+    std::sort(files.begin(), files.end(), [](const TreeEntry& a, const TreeEntry& b) {
+        return a.name < b.name;
+    });
+
+    filepicker_tree_entries.insert(filepicker_tree_entries.end(), dirs.begin(), dirs.end());
+    filepicker_tree_entries.insert(filepicker_tree_entries.end(), files.begin(), files.end());
 }
 
 void VimEngine::scan_project_files() {
@@ -1608,6 +1666,31 @@ void VimEngine::scan_project_files() {
 }
 
 void VimEngine::filter_filepicker_files() {
+    if (filepicker_tree_mode) {
+        filepicker_filtered_tree.clear();
+        if (filepicker_query.empty()) {
+            filepicker_filtered_tree = filepicker_tree_entries;
+        } else {
+            std::string q = filepicker_query;
+            std::transform(q.begin(), q.end(), q.begin(), [](unsigned char c) { return std::tolower(c); });
+            for (const auto& te : filepicker_tree_entries) {
+                if (te.is_parent) {
+                    filepicker_filtered_tree.push_back(te);
+                    continue;
+                }
+                std::string n = te.name;
+                std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return std::tolower(c); });
+                if (n.find(q) != std::string::npos) {
+                    filepicker_filtered_tree.push_back(te);
+                }
+            }
+        }
+        if (filepicker_selected_idx >= static_cast<int>(filepicker_filtered_tree.size())) {
+            filepicker_selected_idx = std::max(0, static_cast<int>(filepicker_filtered_tree.size()) - 1);
+        }
+        return;
+    }
+
     filepicker_filtered_files.clear();
     if (filepicker_query.empty()) {
         filepicker_filtered_files = filepicker_all_files;
@@ -1632,7 +1715,7 @@ void VimEngine::filter_filepicker_files() {
 void VimEngine::render_filepicker(unsigned int screen_h, unsigned int screen_w) {
     int popup_w = std::max(48, static_cast<int>(screen_w * 0.65));
     popup_w = std::min(popup_w, static_cast<int>(screen_w) - 4);
-    int popup_h = 15;
+    int popup_h = std::max(10, static_cast<int>(screen_h * 0.70));
     popup_h = std::min(popup_h, static_cast<int>(screen_h) - 4);
 
     int popup_x = (static_cast<int>(screen_w) - popup_w) / 2;
@@ -1665,43 +1748,42 @@ void VimEngine::render_filepicker(unsigned int screen_h, unsigned int screen_w) 
     ncplane_putstr_yx(stdplane, popup_y + 2, popup_x, "├");
     ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + popup_w - 1, "┤");
 
-    // Title & count
-    std::string title = " File Finder (Alt-e / Space-f) ";
+    // Title
+    std::string title = filepicker_tree_mode ? " Directory (Tab: File Finder) " : " File Finder (Tab: Directory) ";
     ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 
-    std::string count_str = " (" + std::to_string(filepicker_filtered_files.size()) + "/" +
-                            std::to_string(filepicker_all_files.size()) + ") ";
-    if (popup_w - static_cast<int>(count_str.size()) - 3 > popup_x + static_cast<int>(title.size()) + 2) {
-        ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
-        ncplane_putstr_yx(stdplane, popup_y, popup_x + popup_w - static_cast<int>(count_str.size()) - 2, count_str.c_str());
-    }
-
     // Search query prompt
-    ncplane_set_fg_rgb8(stdplane, 80, 220, 120);
-    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "> ");
+    for (int c = 1; c < popup_w - 1; ++c) {
+        ncplane_putchar_yx(stdplane, popup_y + 1, popup_x + c, ' ');
+    }
     ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-    std::string q_display = filepicker_query + "_";
-    int max_q_w = popup_w - 6;
-    if (static_cast<int>(q_display.size()) > max_q_w) {
+    std::string q_display = filepicker_query;
+    int max_q_w = popup_w - 5;
+    if (static_cast<int>(q_display.size()) > max_q_w && max_q_w > 0) {
         q_display = q_display.substr(q_display.size() - max_q_w);
     }
-    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 4, q_display.c_str());
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, q_display.c_str());
+    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2 + static_cast<int>(q_display.size()), "█");
 
-    // File list
+    // File / Directory list
     int visible_rows = popup_h - 4;
+    int total_items = filepicker_tree_mode ? static_cast<int>(filepicker_filtered_tree.size())
+                                          : static_cast<int>(filepicker_filtered_files.size());
+
     if (filepicker_selected_idx < filepicker_scroll) {
         filepicker_scroll = filepicker_selected_idx;
     }
     if (filepicker_selected_idx >= filepicker_scroll + visible_rows) {
         filepicker_scroll = filepicker_selected_idx - visible_rows + 1;
     }
+    filepicker_scroll = std::max(0, filepicker_scroll);
 
     for (int r = 0; r < visible_rows; ++r) {
         int idx = filepicker_scroll + r;
         int draw_y = popup_y + 3 + r;
 
-        if (idx < static_cast<int>(filepicker_filtered_files.size())) {
+        if (idx < total_items) {
             bool is_sel = (idx == filepicker_selected_idx);
             if (is_sel) {
                 ncplane_set_bg_rgb8(stdplane, 45, 65, 115);
@@ -1716,43 +1798,48 @@ void VimEngine::render_filepicker(unsigned int screen_h, unsigned int screen_w) 
                 ncplane_putchar_yx(stdplane, draw_y, popup_x + c, ' ');
             }
 
-            std::string prefix = is_sel ? " ▶ " : "   ";
-            if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 205, 60);
-            ncplane_putstr_yx(stdplane, draw_y, popup_x + 2, prefix.c_str());
+            std::string prefix = is_sel ? ">   " : "    ";
+            if (is_sel) ncplane_set_fg_rgb8(stdplane, 100, 200, 255);
+            ncplane_putstr_yx(stdplane, draw_y, popup_x + 1, prefix.c_str());
 
-            std::string fn = filepicker_filtered_files[idx];
-            char marker = ' ';
-            auto st_it = filepicker_git_status.find(fn);
-            if (st_it != filepicker_git_status.end()) {
-                marker = st_it->second;
-            }
+            if (filepicker_tree_mode) {
+                const auto& item = filepicker_filtered_tree[idx];
+                std::string name = item.name;
 
-            if (marker != ' ') {
-                if (marker == 'M') ncplane_set_fg_rgb8(stdplane, 240, 200, 80);
-                else if (marker == 'A') ncplane_set_fg_rgb8(stdplane, 80, 220, 100);
-                else if (marker == 'D') ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
-                else if (marker == '?') ncplane_set_fg_rgb8(stdplane, 80, 200, 240);
-                else ncplane_set_fg_rgb8(stdplane, 220, 225, 235);
+                if (item.is_dir) {
+                    if (is_sel) ncplane_set_fg_rgb8(stdplane, 130, 225, 255);
+                    else ncplane_set_fg_rgb8(stdplane, 80, 190, 240);
+                } else {
+                    if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+                    else ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
+                }
 
-                char m_buf[3] = {marker, ' ', '\0'};
-                ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, m_buf);
+                int max_len = popup_w - 7;
+                if (static_cast<int>(name.size()) > max_len && max_len > 0) {
+                    name = name.substr(0, max_len);
+                }
+                ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, name.c_str());
             } else {
-                ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, "  ");
-            }
+                std::string fn = filepicker_filtered_files[idx];
 
-            if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-            else ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
+                if (is_sel) ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+                else ncplane_set_fg_rgb8(stdplane, 210, 215, 225);
 
-            int max_len = popup_w - 9;
-            if (static_cast<int>(fn.size()) > max_len) {
-                fn = "..." + fn.substr(fn.size() - max_len + 3);
+                int max_len = popup_w - 7;
+                if (static_cast<int>(fn.size()) > max_len && max_len > 3) {
+                    fn = "..." + fn.substr(fn.size() - max_len + 3);
+                }
+                ncplane_putstr_yx(stdplane, draw_y, popup_x + 5, fn.c_str());
             }
-            ncplane_putstr_yx(stdplane, draw_y, popup_x + 7, fn.c_str());
         }
     }
 
     // Footer
-    std::string footer = " [▲/▼] Navigate  [Enter] Open  [Esc] Cancel ";
+    std::string footer = filepicker_tree_mode ? " [▲/▼] Navigate  [Enter] Open/Enter  [Tab] Files  [Esc] Cancel "
+                                             : " [▲/▼] Navigate  [Enter] Open  [Tab] Tree  [Esc] Cancel ";
+    if (static_cast<int>(footer.size()) > popup_w - 4) {
+        footer = filepicker_tree_mode ? " [Tab] Files  [Enter] Select " : " [Tab] Tree  [Enter] Open ";
+    }
     ncplane_set_fg_rgb8(stdplane, 130, 140, 160);
     ncplane_set_bg_rgb8(stdplane, 20, 22, 28);
     ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());

@@ -1843,6 +1843,72 @@ void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
     }
 
     if (is_enter(ni, key)) {
+        if (filepicker_tree_mode) {
+            if (!filepicker_filtered_tree.empty() &&
+                filepicker_selected_idx >= 0 &&
+                filepicker_selected_idx < static_cast<int>(filepicker_filtered_tree.size())) {
+
+                const auto& entry = filepicker_filtered_tree[filepicker_selected_idx];
+                std::string root = !project_dir.empty() ? project_dir : ".";
+
+                if (entry.is_parent) {
+                    fs::path cur = fs::path(root);
+                    if (!filepicker_cur_dir.empty()) {
+                        cur = fs::path(root) / filepicker_cur_dir;
+                    }
+                    fs::path parent = cur.parent_path();
+                    std::error_code ec;
+                    std::string rel = fs::relative(parent, root, ec).string();
+                    if (ec || rel == ".") rel = "";
+                    filepicker_cur_dir = rel;
+                    filepicker_query.clear();
+                    filepicker_selected_idx = 0;
+                    filepicker_scroll = 0;
+                    scan_filepicker_tree();
+                    filter_filepicker_files();
+                    return;
+                } else if (entry.is_dir) {
+                    std::string dir_name = entry.name;
+                    while (!dir_name.empty() && dir_name.back() == '/') dir_name.pop_back();
+
+                    if (filepicker_cur_dir.empty()) {
+                        filepicker_cur_dir = dir_name;
+                    } else {
+                        filepicker_cur_dir = filepicker_cur_dir + "/" + dir_name;
+                    }
+                    filepicker_query.clear();
+                    filepicker_selected_idx = 0;
+                    filepicker_scroll = 0;
+                    scan_filepicker_tree();
+                    filter_filepicker_files();
+                    return;
+                } else {
+                    std::string full_path = entry.full_path;
+                    save_window_position(active_win(), active_buf());
+
+                    size_t found_idx = buffers.size();
+                    for (size_t i = 0; i < buffers.size(); ++i) {
+                        if (buffers[i]->file_path == full_path) {
+                            found_idx = i;
+                            break;
+                        }
+                    }
+
+                    if (found_idx == buffers.size()) {
+                        buffers.push_back(TextBuffer::from_file(full_path));
+                        found_idx = buffers.size() - 1;
+                    }
+
+                    active_win().buffer_idx = found_idx;
+                    restore_window_position(active_win(), active_buf());
+                    show_filepicker = false;
+                    set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
+                    return;
+                }
+            }
+            return;
+        }
+
         if (!filepicker_filtered_files.empty() &&
             filepicker_selected_idx >= 0 &&
             filepicker_selected_idx < static_cast<int>(filepicker_filtered_files.size())) {
@@ -1873,17 +1939,20 @@ void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
+    int max_items = filepicker_tree_mode ? static_cast<int>(filepicker_filtered_tree.size())
+                                         : static_cast<int>(filepicker_filtered_files.size());
+
     if (key == NCKEY_UP || is_ctrl(ni, key, 'p') || is_ctrl(ni, key, 'k')) {
         if (filepicker_selected_idx > 0) {
             filepicker_selected_idx--;
-        } else if (!filepicker_filtered_files.empty()) {
-            filepicker_selected_idx = static_cast<int>(filepicker_filtered_files.size()) - 1;
+        } else if (max_items > 0) {
+            filepicker_selected_idx = max_items - 1;
         }
         return;
     }
 
     if (key == NCKEY_DOWN || is_ctrl(ni, key, 'n') || is_ctrl(ni, key, 'j')) {
-        if (filepicker_selected_idx + 1 < static_cast<int>(filepicker_filtered_files.size())) {
+        if (filepicker_selected_idx + 1 < max_items) {
             filepicker_selected_idx++;
         } else {
             filepicker_selected_idx = 0;
@@ -1891,9 +1960,37 @@ void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
+    if (key == '\t' || key == NCKEY_TAB || ni.id == '\t' || ni.id == NCKEY_TAB) {
+        filepicker_tree_mode = !filepicker_tree_mode;
+        filepicker_query.clear();
+        filepicker_selected_idx = 0;
+        filepicker_scroll = 0;
+
+        if (filepicker_tree_mode) {
+            scan_filepicker_tree();
+            filter_filepicker_files();
+            set_info_msg("Directory Tree (Tab: Files)");
+        } else {
+            filter_filepicker_files();
+            set_info_msg("Find File (Tab: Tree)");
+        }
+        return;
+    }
+
     if (is_backspace(ni, key)) {
         if (!filepicker_query.empty()) {
             filepicker_query.pop_back();
+            filter_filepicker_files();
+        } else if (filepicker_tree_mode && !filepicker_cur_dir.empty()) {
+            size_t slash = filepicker_cur_dir.find_last_of("/\\");
+            if (slash != std::string::npos) {
+                filepicker_cur_dir = filepicker_cur_dir.substr(0, slash);
+            } else {
+                filepicker_cur_dir.clear();
+            }
+            filepicker_selected_idx = 0;
+            filepicker_scroll = 0;
+            scan_filepicker_tree();
             filter_filepicker_files();
         }
         return;
