@@ -188,6 +188,11 @@ private:
     int search_current_match_idx{-1};
     int search_total_matches{0};
 
+    // Visual command range ('<, '>)
+    int visual_range_start_y{-1};
+    int visual_range_end_y{-1};
+    Mode visual_save_mode{Mode::NORMAL};
+
     // Ripgrep grouped search state
     struct RgMatch {
         std::string file;
@@ -347,6 +352,7 @@ public:
     void handle_command_mode(const ncinput& ni, uint32_t key);
     void handle_insert_mode(const ncinput& ni, uint32_t key);
     void execute_command(const std::string& cmd_str);
+    bool execute_substitute(const std::string& cmd_str);
 
     void update_window_scroll(Window& win, const TextBuffer& buf);
     void render();

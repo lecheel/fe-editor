@@ -986,6 +986,11 @@ void VimEngine::render_window(Window& win, bool is_active) {
     }
 
     Cursor primary = win.cursors.empty() ? Cursor{0, 0} : win.cursors.front();
+    Mode effective_visual_mode = mode;
+    if (mode == Mode::COMMAND && (visual_save_mode == Mode::VISUAL || visual_save_mode == Mode::VISUAL_BLOCK)) {
+        effective_visual_mode = visual_save_mode;
+    }
+
     int v_min_y = std::min(win.visual_anchor.y, primary.y);
     int v_max_y = std::max(win.visual_anchor.y, primary.y);
     int v_min_x = std::min(win.visual_anchor.x, primary.x);
@@ -1171,12 +1176,12 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 bool has_cursor = cursor_set.count({line_idx, static_cast<int>(byte_idx)});
                 bool in_visual = false;
                 if (is_active) {
-                    if (mode == Mode::VISUAL_BLOCK) {
+                    if (effective_visual_mode == Mode::VISUAL_BLOCK) {
                         if (line_idx >= v_min_y && line_idx <= v_max_y &&
                             static_cast<int>(byte_idx) >= v_min_x && static_cast<int>(byte_idx) <= v_max_x) {
                             in_visual = true;
                         }
-                    } else if (mode == Mode::VISUAL) {
+                    } else if (effective_visual_mode == Mode::VISUAL) {
                         Cursor cur_pt{line_idx, static_cast<int>(byte_idx)};
                         Cursor v_start = std::min(win.visual_anchor, primary);
                         Cursor v_end = std::max(win.visual_anchor, primary);
@@ -1238,12 +1243,12 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 bool has_cursor = cursor_set.count({line_idx, static_cast<int>(line.size())});
                 bool in_visual = false;
                 if (is_active) {
-                    if (mode == Mode::VISUAL_BLOCK) {
+                    if (effective_visual_mode == Mode::VISUAL_BLOCK) {
                         if (line_idx >= v_min_y && line_idx <= v_max_y &&
                             static_cast<int>(line.size()) >= v_min_x && static_cast<int>(line.size()) <= v_max_x) {
                             in_visual = true;
                         }
-                    } else if (mode == Mode::VISUAL) {
+                    } else if (effective_visual_mode == Mode::VISUAL) {
                         Cursor cur_pt{line_idx, static_cast<int>(line.size())};
                         Cursor v_start = std::min(win.visual_anchor, primary);
                         Cursor v_end = std::max(win.visual_anchor, primary);

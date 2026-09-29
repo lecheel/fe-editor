@@ -2603,6 +2603,8 @@ bool s_dg_pending = false;
 bool s_y_pending = false;
 bool s_g_pending = false;
 bool s_visual_g_pending = false;
+bool s_r_pending = false;
+bool s_visual_r_pending = false;
 bool s_equal_pending = false;
 bool s_greater_pending = false;
 bool s_less_pending = false;
@@ -3260,6 +3262,46 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         }
     }
 
+    if (s_r_pending) {
+        s_r_pending = false;
+        if (is_esc(ni, key)) {
+            set_info_msg("");
+            return;
+        }
+        std::string ch = Keymap::get_input_text(ni, key);
+        if (key == NCKEY_ENTER || key == '\n' || key == '\r') ch = "\n";
+        else if (key == '\t' || key == NCKEY_TAB) ch = "\t";
+        if (!ch.empty()) {
+            buf.push_undo(win.cursors);
+            for (auto& c : win.cursors) {
+                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
+                    std::string& l = buf.lines[c.y];
+                    if (c.x < static_cast<int>(l.size())) {
+                        if (ch == "\n") {
+                            std::string rest = l.substr(c.x + 1);
+                            l.erase(c.x);
+                            buf.lines.insert(buf.lines.begin() + c.y + 1, rest);
+                            c.y++;
+                            c.x = 0;
+                        } else {
+                            int clen = Keymap::utf8_char_len(static_cast<unsigned char>(l[c.x]));
+                            if (c.x + clen > static_cast<int>(l.size())) clen = static_cast<int>(l.size()) - c.x;
+                            l.replace(c.x, clen, ch);
+                        }
+                    }
+                }
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Replaced char (r)");
+        }
+        return;
+    }
+
     if (s_g_pending) {
         s_g_pending = false;
         if (key == 'g') {
@@ -3373,6 +3415,10 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
             break;
         case 'X':
             execute_dot_command(*this, DotCommand::CAP_X, false);
+            break;
+        case 'r':
+            s_r_pending = true;
+            set_info_msg("r");
             break;
         case 'd':
             s_d_pending = true;
@@ -3649,6 +3695,53 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
+    if (s_visual_r_pending) {
+        s_visual_r_pending = false;
+        if (is_esc(ni, key)) {
+            set_info_msg("");
+            return;
+        }
+        std::string ch = Keymap::get_input_text(ni, key);
+        if (!ch.empty() && ch != "\n") {
+            buf.push_undo(win.cursors);
+            Cursor primary = win.cursors.front();
+            if (mode == Mode::VISUAL_BLOCK) {
+                int min_y = std::min(win.visual_anchor.y, primary.y);
+                int max_y = std::max(win.visual_anchor.y, primary.y);
+                int min_x = std::min(win.visual_anchor.x, primary.x);
+                int max_x = std::max(win.visual_anchor.x, primary.x);
+                for (int y = min_y; y <= max_y && y < static_cast<int>(buf.lines.size()); ++y) {
+                    std::string& l = buf.lines[y];
+                    for (int x = min_x; x <= max_x && x < static_cast<int>(l.size()); ++x) {
+                        l.replace(x, 1, ch);
+                    }
+                }
+                win.cursors = {{min_y, min_x}};
+            } else {
+                Cursor start = std::min(win.visual_anchor, primary);
+                Cursor end = std::max(win.visual_anchor, primary);
+                for (int y = start.y; y <= end.y && y < static_cast<int>(buf.lines.size()); ++y) {
+                    std::string& l = buf.lines[y];
+                    int sx = (y == start.y) ? start.x : 0;
+                    int ex = (y == end.y) ? end.x : (static_cast<int>(l.size()) - 1);
+                    for (int x = sx; x <= ex && x < static_cast<int>(l.size()); ++x) {
+                        l.replace(x, 1, ch);
+                    }
+                }
+                win.cursors = {start};
+            }
+            buf.modified = true;
+            buf.version++;
+            buf.invalidate_hunks();
+            if (buf.syntax) buf.syntax->update_text(buf.lines);
+            mode = Mode::NORMAL;
+            win.clamp_all_cursors(buf, mode);
+            update_window_scroll(win, buf);
+            set_info_msg("Replaced selection with '" + ch + "' (r)");
+        }
+        return;
+    }
+
     if (s_visual_g_pending) {
         s_visual_g_pending = false;
         if (key == 'g') {
@@ -3684,9 +3777,12 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
 
     if (key == ':' || ni.id == ':' || (ni.utf8[0] == ':' && ni.utf8[1] == '\0') ||
         (ni.shift && (key == ';' || ni.id == ';'))) {
+        visual_range_start_y = std::min(win.visual_anchor.y, win.cursors.front().y);
+        visual_range_end_y = std::max(win.visual_anchor.y, win.cursors.front().y);
+        visual_save_mode = mode;
         mode = Mode::COMMAND;
-        cmd_buffer.clear();
-        cmd_cursor_pos = 0;
+        cmd_buffer = "'<,'>";
+        cmd_cursor_pos = 5;
         cmd_history_idx = -1;
         cmd_history_draft.clear();
         return;
@@ -3890,6 +3986,10 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
             set_info_msg("Unindented selection (<)");
             break;
         }
+        case 'r':
+            s_visual_r_pending = true;
+            set_info_msg("r");
+            break;
         case 'y': {
             Cursor primary = win.cursors.front();
             yank_reg.lines.clear();
@@ -4259,12 +4359,20 @@ void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
 
     // Cancel command mode: Esc or Ctrl-C
     if (key == NCKEY_ESC || is_ctrl(ni, key, 'c')) {
-        mode = Mode::NORMAL;
+        if (visual_save_mode == Mode::VISUAL || visual_save_mode == Mode::VISUAL_BLOCK) {
+            mode = visual_save_mode;
+            visual_save_mode = Mode::NORMAL;
+            set_info_msg(mode == Mode::VISUAL_BLOCK ? "-- VISUAL BLOCK --" : "-- VISUAL --");
+        } else {
+            mode = Mode::NORMAL;
+            set_info_msg("");
+        }
+        visual_range_start_y = -1;
+        visual_range_end_y = -1;
         cmd_buffer.clear();
         cmd_cursor_pos = 0;
         cmd_history_idx = -1;
         cmd_history_draft.clear();
-        set_info_msg("");
         return;
     }
 
@@ -4289,7 +4397,10 @@ void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
         cmd_buffer.clear();
         cmd_cursor_pos = 0;
         mode = Mode::NORMAL;
+        visual_save_mode = Mode::NORMAL;
         execute_command(to_exec);
+        visual_range_start_y = -1;
+        visual_range_end_y = -1;
         return;
     }
 
@@ -4376,8 +4487,16 @@ void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
             cmd_buffer.erase(cmd_cursor_pos - 1, 1);
             cmd_cursor_pos--;
         } else if (cmd_buffer.empty()) {
-            mode = Mode::NORMAL;
-            set_info_msg("");
+            if (visual_save_mode == Mode::VISUAL || visual_save_mode == Mode::VISUAL_BLOCK) {
+                mode = visual_save_mode;
+                visual_save_mode = Mode::NORMAL;
+                set_info_msg(mode == Mode::VISUAL_BLOCK ? "-- VISUAL BLOCK --" : "-- VISUAL --");
+            } else {
+                mode = Mode::NORMAL;
+                set_info_msg("");
+            }
+            visual_range_start_y = -1;
+            visual_range_end_y = -1;
         }
         return;
     }
@@ -4450,6 +4569,289 @@ void VimEngine::handle_command_mode(const ncinput& ni, uint32_t key) {
     }
 }
 
+bool VimEngine::execute_substitute(const std::string& cmd_str) {
+    std::string str = cmd_str;
+    size_t s = 0;
+    while (s < str.size() && std::isspace(static_cast<unsigned char>(str[s]))) s++;
+    if (s < str.size() && str[s] == ':') s++;
+    while (s < str.size() && std::isspace(static_cast<unsigned char>(str[s]))) s++;
+    str = str.substr(s);
+
+    if (str.empty()) return false;
+
+    auto& win = active_win();
+    auto& buf = active_buf();
+
+    int start_line = -1;
+    int end_line = -1;
+    size_t after_sub_cmd = std::string::npos;
+
+    if (str.rfind("%s", 0) == 0) {
+        start_line = 0;
+        end_line = static_cast<int>(buf.lines.size()) - 1;
+        after_sub_cmd = 2;
+    } else if (str.rfind("%substitute", 0) == 0) {
+        start_line = 0;
+        end_line = static_cast<int>(buf.lines.size()) - 1;
+        after_sub_cmd = 11;
+    } else if (str.rfind("'<,'>s", 0) == 0) {
+        start_line = (visual_range_start_y >= 0) ? visual_range_start_y : win.cursors.front().y;
+        end_line = (visual_range_end_y >= 0) ? visual_range_end_y : win.cursors.front().y;
+        after_sub_cmd = 6;
+    } else if (str.rfind("'<,'>substitute", 0) == 0) {
+        start_line = (visual_range_start_y >= 0) ? visual_range_start_y : win.cursors.front().y;
+        end_line = (visual_range_end_y >= 0) ? visual_range_end_y : win.cursors.front().y;
+        after_sub_cmd = 15;
+    } else if (str.rfind("s", 0) == 0 && (str.size() == 1 || !std::isalpha(static_cast<unsigned char>(str[1])))) {
+        start_line = win.cursors.front().y;
+        end_line = win.cursors.front().y;
+        after_sub_cmd = 1;
+    } else if (str.rfind("substitute", 0) == 0 && (str.size() == 10 || !std::isalpha(static_cast<unsigned char>(str[10])))) {
+        start_line = win.cursors.front().y;
+        end_line = win.cursors.front().y;
+        after_sub_cmd = 10;
+    } else {
+        size_t comma = str.find(',');
+        if (comma != std::string::npos) {
+            std::string r1 = str.substr(0, comma);
+            size_t post_comma = comma + 1;
+            while (post_comma < str.size() && (std::isdigit(static_cast<unsigned char>(str[post_comma])) || str[post_comma] == '.' || str[post_comma] == '$')) {
+                post_comma++;
+            }
+            std::string r2 = str.substr(comma + 1, post_comma - (comma + 1));
+            auto parse_val = [&](const std::string& val) -> int {
+                if (val == ".") return win.cursors.front().y;
+                if (val == "$") return static_cast<int>(buf.lines.size()) - 1;
+                try { return std::stoi(val) - 1; } catch (...) { return -1; }
+            };
+            int v1 = parse_val(r1);
+            int v2 = parse_val(r2);
+            if (v1 >= 0 && v2 >= 0) {
+                if (str.compare(post_comma, 10, "substitute") == 0) {
+                    start_line = v1;
+                    end_line = v2;
+                    after_sub_cmd = post_comma + 10;
+                } else if (str.compare(post_comma, 1, "s") == 0) {
+                    start_line = v1;
+                    end_line = v2;
+                    after_sub_cmd = post_comma + 1;
+                }
+            }
+        }
+    }
+
+    if (after_sub_cmd == std::string::npos) {
+        return false;
+    }
+
+    while (after_sub_cmd < str.size() && std::isspace(static_cast<unsigned char>(str[after_sub_cmd]))) {
+        after_sub_cmd++;
+    }
+
+    if (after_sub_cmd >= str.size()) {
+        set_info_msg("E471: Argument required");
+        return true;
+    }
+
+    char delim = str[after_sub_cmd++];
+    if (std::isalnum(static_cast<unsigned char>(delim)) || std::isspace(static_cast<unsigned char>(delim))) {
+        return false;
+    }
+
+    std::string pattern;
+    std::string replacement;
+    std::string flags;
+
+    bool escaped = false;
+    while (after_sub_cmd < str.size()) {
+        char c = str[after_sub_cmd++];
+        if (escaped) {
+            if (c != delim) pattern += '\\';
+            pattern += c;
+            escaped = false;
+        } else if (c == '\\') {
+            escaped = true;
+        } else if (c == delim) {
+            break;
+        } else {
+            pattern += c;
+        }
+    }
+    if (escaped) pattern += '\\';
+
+    escaped = false;
+    while (after_sub_cmd < str.size()) {
+        char c = str[after_sub_cmd++];
+        if (escaped) {
+            if (c == 'n') replacement += '\n';
+            else if (c == 't') replacement += '\t';
+            else if (c == '\\') replacement += '\\';
+            else if (c == delim) replacement += delim;
+            else {
+                replacement += '\\';
+                replacement += c;
+            }
+            escaped = false;
+        } else if (c == '\\') {
+            escaped = true;
+        } else if (c == delim) {
+            break;
+        } else {
+            replacement += c;
+        }
+    }
+    if (escaped) replacement += '\\';
+
+    while (after_sub_cmd < str.size()) {
+        char c = str[after_sub_cmd++];
+        if (!std::isspace(static_cast<unsigned char>(c))) {
+            flags += c;
+        }
+    }
+
+    if (pattern.empty()) {
+        if (!search_query.empty()) {
+            pattern = search_query;
+        } else {
+            set_info_msg("E35: No previous regular expression");
+            return true;
+        }
+    }
+
+    bool flag_global = false;
+    bool flag_ignore_case = false;
+    bool flag_match_case = false;
+    for (char f : flags) {
+        if (f == 'g' || f == 'G') flag_global = true;
+        else if (f == 'i') flag_ignore_case = true;
+        else if (f == 'I') flag_match_case = true;
+    }
+
+    bool case_sensitive = true;
+    if (flag_match_case) {
+        case_sensitive = true;
+    } else if (flag_ignore_case) {
+        case_sensitive = false;
+    } else {
+        bool has_upper = false;
+        for (char c : pattern) {
+            if (std::isupper(static_cast<unsigned char>(c))) {
+                has_upper = true;
+                break;
+            }
+        }
+        case_sensitive = has_upper;
+    }
+
+    if (buf.lines.empty()) {
+        set_info_msg("E486: Pattern not found: " + pattern);
+        return true;
+    }
+
+    int max_y = static_cast<int>(buf.lines.size()) - 1;
+    start_line = std::clamp(start_line, 0, max_y);
+    end_line = std::clamp(end_line, 0, max_y);
+    if (start_line > end_line) std::swap(start_line, end_line);
+
+    auto find_match_in_line = [&](const std::string& line, size_t pos) -> size_t {
+        if (pos >= line.size() && !line.empty()) return std::string::npos;
+        if (case_sensitive) {
+            return line.find(pattern, pos);
+        } else {
+            auto it = std::search(line.begin() + pos, line.end(),
+                                  pattern.begin(), pattern.end(),
+                                  [](char a, char b) {
+                                      return std::tolower(static_cast<unsigned char>(a)) ==
+                                             std::tolower(static_cast<unsigned char>(b));
+                                  });
+            if (it != line.end()) return std::distance(line.begin(), it);
+            return std::string::npos;
+        }
+    };
+
+    int total_substitutions = 0;
+    int lines_affected = 0;
+    for (int y = start_line; y <= end_line; ++y) {
+        size_t p = find_match_in_line(buf.lines[y], 0);
+        if (p != std::string::npos) {
+            lines_affected++;
+            while (p != std::string::npos) {
+                total_substitutions++;
+                if (!flag_global) break;
+                p = find_match_in_line(buf.lines[y], p + std::max<size_t>(1, pattern.size()));
+            }
+        }
+    }
+
+    if (total_substitutions == 0) {
+        set_info_msg("E486: Pattern not found: " + pattern);
+        return true;
+    }
+
+    buf.push_undo(win.cursors);
+
+    int cur_line = start_line;
+    int end_target = end_line;
+    while (cur_line <= end_target && cur_line < static_cast<int>(buf.lines.size())) {
+        std::string line = buf.lines[cur_line];
+        size_t p = find_match_in_line(line, 0);
+        if (p != std::string::npos) {
+            if (!flag_global) {
+                line.replace(p, pattern.size(), replacement);
+            } else {
+                size_t step = std::max<size_t>(1, replacement.size());
+                while (p != std::string::npos) {
+                    line.replace(p, pattern.size(), replacement);
+                    p = find_match_in_line(line, p + step);
+                }
+            }
+
+            size_t nl = line.find('\n');
+            if (nl == std::string::npos) {
+                buf.lines[cur_line] = line;
+                cur_line++;
+            } else {
+                std::vector<std::string> split_lines;
+                std::string seg;
+                for (char ch : line) {
+                    if (ch == '\n') {
+                        split_lines.push_back(seg);
+                        seg.clear();
+                    } else {
+                        seg += ch;
+                    }
+                }
+                split_lines.push_back(seg);
+
+                buf.lines[cur_line] = split_lines[0];
+                buf.lines.insert(buf.lines.begin() + cur_line + 1, split_lines.begin() + 1, split_lines.end());
+                int added = static_cast<int>(split_lines.size()) - 1;
+                end_target += added;
+                cur_line += added + 1;
+            }
+        } else {
+            cur_line++;
+        }
+    }
+
+    buf.modified = true;
+    buf.version++;
+    buf.invalidate_hunks();
+    if (buf.syntax) buf.syntax->update_text(buf.lines);
+    win.clamp_all_cursors(buf, mode);
+    update_window_scroll(win, buf);
+
+    search_query = pattern;
+    search_highlight_on = true;
+
+    std::string msg = std::to_string(total_substitutions) + " substitution" +
+                      (total_substitutions == 1 ? "" : "s") + " on " +
+                      std::to_string(lines_affected) + " line" +
+                      (lines_affected == 1 ? "" : "s");
+    set_info_msg(msg);
+    return true;
+}
+
 void VimEngine::execute_command(const std::string& cmd_str) {
     close_cmd_completion();
     std::istringstream iss(cmd_str);
@@ -4457,6 +4859,10 @@ void VimEngine::execute_command(const std::string& cmd_str) {
     iss >> cmd;
 
     if (cmd.empty()) return;
+
+    if (execute_substitute(cmd_str)) {
+        return;
+    }
 
     if (CommandRegistry::instance().execute(*this, cmd_str)) {
         return;
