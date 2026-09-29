@@ -1120,8 +1120,71 @@ void VimEngine::render_window(Window& win, bool is_active) {
             auto ui_sel = theme.get_ui_style("ui.selection.primary", {{255, 255, 255}, {38, 79, 120}, true, true});
 
             std::string active_search = search_active ? search_input : (search_highlight_on ? search_query : "");
+            int sub_start_line = -1;
+            int sub_end_line = -1;
+
+            if (mode == Mode::COMMAND && !cmd_buffer.empty()) {
+                std::string cstr = cmd_buffer;
+                size_t cs = 0;
+                while (cs < cstr.size() && std::isspace(static_cast<unsigned char>(cstr[cs]))) cs++;
+                if (cs < cstr.size() && cstr[cs] == ':') cs++;
+                cstr = cstr.substr(cs);
+
+                size_t after_cmd = std::string::npos;
+                if (cstr.rfind("'<,'>s", 0) == 0) {
+                    sub_start_line = (visual_range_start_y >= 0) ? visual_range_start_y : primary.y;
+                    sub_end_line = (visual_range_end_y >= 0) ? visual_range_end_y : primary.y;
+                    after_cmd = 6;
+                } else if (cstr.rfind("%s", 0) == 0) {
+                    sub_start_line = 0;
+                    sub_end_line = static_cast<int>(buf.lines.size()) - 1;
+                    after_cmd = 2;
+                } else if (cstr.rfind("s", 0) == 0 && (cstr.size() == 1 || !std::isalpha(static_cast<unsigned char>(cstr[1])))) {
+                    sub_start_line = primary.y;
+                    sub_end_line = primary.y;
+                    after_cmd = 1;
+                }
+
+                if (after_cmd != std::string::npos) {
+                    while (after_cmd < cstr.size() && std::isspace(static_cast<unsigned char>(cstr[after_cmd]))) after_cmd++;
+                    if (after_cmd < cstr.size()) {
+                        char delim = cstr[after_cmd++];
+                        if (!std::isalnum(static_cast<unsigned char>(delim)) && !std::isspace(static_cast<unsigned char>(delim))) {
+                            std::string pat;
+                            bool esc = false;
+                            while (after_cmd < cstr.size()) {
+                                char ch = cstr[after_cmd++];
+                                if (esc) {
+                                    if (ch != delim) pat += '\\';
+                                    pat += ch;
+                                    esc = false;
+                                } else if (ch == '\\') {
+                                    esc = true;
+                                } else if (ch == delim) {
+                                    break;
+                                } else {
+                                    pat += ch;
+                                }
+                            }
+                            if (!pat.empty()) {
+                                active_search = pat;
+                            }
+                        }
+                    }
+                }
+            }
+
             std::vector<std::pair<int, int>> search_ranges;
             bool has_search = !active_search.empty();
+            if (has_search && sub_start_line >= 0) {
+                // Dismiss the solid blue selection block once substitute pattern is active (like Neovim)
+                effective_visual_mode = Mode::NORMAL;
+                int s_min = std::min(sub_start_line, sub_end_line);
+                int s_max = std::max(sub_start_line, sub_end_line);
+                if (line_idx < s_min || line_idx > s_max) {
+                    has_search = false;
+                }
+            }
             if (has_search) {
                 bool has_upper = false;
                 for (char sc : active_search) {
@@ -1212,15 +1275,15 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     if (has_cursor) {
                         ncplane_set_fg_rgb8(stdplane, ui_cursor.fg.r, ui_cursor.fg.g, ui_cursor.fg.b);
                         ncplane_set_bg_rgb8(stdplane, ui_cursor.bg.r, ui_cursor.bg.g, ui_cursor.bg.b);
-                    } else if (in_visual) {
-                        ncplane_set_fg_rgb8(stdplane, ui_sel.fg.r, ui_sel.fg.g, ui_sel.fg.b);
-                        ncplane_set_bg_rgb8(stdplane, ui_sel.bg.r, ui_sel.bg.g, ui_sel.bg.b);
                     } else if (is_current_search) {
                         ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
                         ncplane_set_bg_rgb8(stdplane, 255, 215, 60);
                     } else if (in_search) {
-                        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-                        ncplane_set_bg_rgb8(stdplane, 81, 92, 107);
+                        ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
+                        ncplane_set_bg_rgb8(stdplane, 255, 180, 50);
+                    } else if (in_visual) {
+                        ncplane_set_fg_rgb8(stdplane, ui_sel.fg.r, ui_sel.fg.g, ui_sel.fg.b);
+                        ncplane_set_bg_rgb8(stdplane, ui_sel.bg.r, ui_sel.bg.g, ui_sel.bg.b);
                     } else {
                         if (byte_idx < syn_styles.size()) {
                             ncplane_set_fg_rgb8(stdplane, syn_styles[byte_idx].r, syn_styles[byte_idx].g, syn_styles[byte_idx].b);
