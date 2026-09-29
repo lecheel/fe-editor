@@ -177,6 +177,17 @@ private:
     int filepicker_selected_idx{0};
     int filepicker_scroll{0};
 
+    // Buffer search state ('/' incremental search, n/N)
+    bool search_active{false};
+    std::string search_query;
+    std::string search_input;
+    int search_input_cursor{0};
+    bool search_highlight_on{false};
+    Cursor search_start_cursor{0, 0};
+    int search_start_scroll{0};
+    int search_current_match_idx{-1};
+    int search_total_matches{0};
+
     // Ripgrep grouped search state
     struct RgMatch {
         std::string file;
@@ -252,6 +263,13 @@ public:
     void filter_filepicker_files();
     void handle_filepicker_input(const ncinput& ni, uint32_t key);
     void render_filepicker(unsigned int screen_h, unsigned int screen_w);
+
+    void open_search();
+    void handle_search_input(const ncinput& ni, uint32_t key);
+    void update_search_incremental();
+    void search_jump_next();
+    void search_jump_prev();
+    void clear_search_highlights();
 
     std::string get_word_under_cursor();
     std::string get_rg_cache_path() const;

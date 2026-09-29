@@ -1114,6 +1114,36 @@ void VimEngine::render_window(Window& win, bool is_active) {
             auto ui_cursor = theme.get_ui_style("ui.cursor", {{0, 0, 0}, {166, 166, 166}, true, true});
             auto ui_sel = theme.get_ui_style("ui.selection.primary", {{255, 255, 255}, {38, 79, 120}, true, true});
 
+            std::string active_search = search_active ? search_input : (search_highlight_on ? search_query : "");
+            std::vector<std::pair<int, int>> search_ranges;
+            bool has_search = !active_search.empty();
+            if (has_search) {
+                bool has_upper = false;
+                for (char sc : active_search) {
+                    if (std::isupper(static_cast<unsigned char>(sc))) { has_upper = true; break; }
+                }
+                size_t spos = 0;
+                while (spos < line.size()) {
+                    size_t found = std::string::npos;
+                    if (has_upper) {
+                        found = line.find(active_search, spos);
+                    } else {
+                        auto it = std::search(line.begin() + spos, line.end(),
+                                              active_search.begin(), active_search.end(),
+                                              [](char a, char b) {
+                                                  return std::tolower(static_cast<unsigned char>(a)) ==
+                                                         std::tolower(static_cast<unsigned char>(b));
+                                              });
+                        if (it != line.end()) {
+                            found = std::distance(line.begin(), it);
+                        }
+                    }
+                    if (found == std::string::npos) break;
+                    search_ranges.push_back({static_cast<int>(found), static_cast<int>(found + active_search.size())});
+                    spos = found + std::max<size_t>(1, active_search.size());
+                }
+            }
+
             ncplane_set_bg_rgb8(stdplane, ui_bg.bg.r, ui_bg.bg.g, ui_bg.bg.b);
             for (int c = 0; c < text_avail_w; ++c) {
                 ncplane_putchar_yx(stdplane, draw_y, win.x + gutter_w + c, ' ');
@@ -1156,6 +1186,20 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     }
                 }
 
+                bool in_search = false;
+                bool is_current_search = false;
+                if (has_search) {
+                    for (const auto& sr : search_ranges) {
+                        if (static_cast<int>(byte_idx) >= sr.first && static_cast<int>(byte_idx) < sr.second) {
+                            in_search = true;
+                            if (line_idx == primary.y && sr.first == primary.x) {
+                                is_current_search = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+
                 int screen_col = col_x - win.scroll_x;
                 if (screen_col >= 0 && screen_col < text_avail_w) {
                     int draw_x = win.x + gutter_w + screen_col;
@@ -1166,6 +1210,12 @@ void VimEngine::render_window(Window& win, bool is_active) {
                     } else if (in_visual) {
                         ncplane_set_fg_rgb8(stdplane, ui_sel.fg.r, ui_sel.fg.g, ui_sel.fg.b);
                         ncplane_set_bg_rgb8(stdplane, ui_sel.bg.r, ui_sel.bg.g, ui_sel.bg.b);
+                    } else if (is_current_search) {
+                        ncplane_set_fg_rgb8(stdplane, 0, 0, 0);
+                        ncplane_set_bg_rgb8(stdplane, 255, 215, 60);
+                    } else if (in_search) {
+                        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+                        ncplane_set_bg_rgb8(stdplane, 81, 92, 107);
                     } else {
                         if (byte_idx < syn_styles.size()) {
                             ncplane_set_fg_rgb8(stdplane, syn_styles[byte_idx].r, syn_styles[byte_idx].g, syn_styles[byte_idx].b);
@@ -1372,27 +1422,32 @@ void VimEngine::render_status_bar(int y, unsigned int screen_w) {
     // --- Left Segment 1: [mode] ---
     std::string mode_str = " NORMAL ";
     UIStyle m_style = theme.get_ui_style("ui.statusline.powerline.normal", {{255, 255, 255}, {0, 43, 80}, true, true});
-    switch (mode) {
-        case Mode::NORMAL:
-            mode_str = " NORMAL ";
-            m_style = theme.get_ui_style("ui.statusline.powerline.normal", {{255, 255, 255}, {0, 43, 80}, true, true});
-            break;
-        case Mode::INSERT:
-            mode_str = " INSERT ";
-            m_style = theme.get_ui_style("ui.statusline.powerline.insert", {{255, 255, 255}, {72, 126, 2}, true, true});
-            break;
-        case Mode::VISUAL:
-            mode_str = " VISUAL ";
-            m_style = theme.get_ui_style("ui.statusline.powerline.visual", {{255, 255, 255}, {197, 134, 192}, true, true});
-            break;
-        case Mode::VISUAL_BLOCK:
-            mode_str = " V-BLOCK ";
-            m_style = theme.get_ui_style("ui.statusline.powerline.visual", {{255, 255, 255}, {197, 134, 192}, true, true});
-            break;
-        case Mode::COMMAND:
-            mode_str = " COMMAND ";
-            m_style = UIStyle{{15, 15, 15}, {240, 200, 80}, true, true};
-            break;
+    if (search_active) {
+        mode_str = " SEARCH ";
+        m_style = UIStyle{{15, 15, 15}, {255, 215, 60}, true, true};
+    } else {
+        switch (mode) {
+            case Mode::NORMAL:
+                mode_str = " NORMAL ";
+                m_style = theme.get_ui_style("ui.statusline.powerline.normal", {{255, 255, 255}, {0, 43, 80}, true, true});
+                break;
+            case Mode::INSERT:
+                mode_str = " INSERT ";
+                m_style = theme.get_ui_style("ui.statusline.powerline.insert", {{255, 255, 255}, {72, 126, 2}, true, true});
+                break;
+            case Mode::VISUAL:
+                mode_str = " VISUAL ";
+                m_style = theme.get_ui_style("ui.statusline.powerline.visual", {{255, 255, 255}, {197, 134, 192}, true, true});
+                break;
+            case Mode::VISUAL_BLOCK:
+                mode_str = " V-BLOCK ";
+                m_style = theme.get_ui_style("ui.statusline.powerline.visual", {{255, 255, 255}, {197, 134, 192}, true, true});
+                break;
+            case Mode::COMMAND:
+                mode_str = " COMMAND ";
+                m_style = UIStyle{{15, 15, 15}, {240, 200, 80}, true, true};
+                break;
+        }
     }
     ncplane_set_fg_rgb8(stdplane, m_style.fg.r, m_style.fg.g, m_style.fg.b);
     ncplane_set_bg_rgb8(stdplane, m_style.bg.r, m_style.bg.g, m_style.bg.b);
@@ -1493,6 +1548,39 @@ void VimEngine::render_info_bar(int y, unsigned int screen_w) {
         if (view_start < static_cast<int>(cmd_buffer.size())) {
             std::string disp = cmd_buffer.substr(view_start, avail_w);
             ncplane_putstr_yx(stdplane, y, 1, disp.c_str());
+        }
+    } else if (search_active) {
+        ncplane_set_fg_rgb8(stdplane, 255, 230, 80);
+        ncplane_set_bg_rgb8(stdplane, 20, 20, 24);
+        ncplane_putstr_yx(stdplane, y, 0, "/");
+
+        int avail_w = std::max(1, static_cast<int>(screen_w) - 1);
+        int view_start = 0;
+        if (search_input_cursor >= avail_w) {
+            view_start = search_input_cursor - avail_w + 1;
+        }
+
+        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        if (view_start < static_cast<int>(search_input.size())) {
+            std::string disp = search_input.substr(view_start, avail_w);
+            ncplane_putstr_yx(stdplane, y, 1, disp.c_str());
+        }
+
+        if (search_total_matches > 0) {
+            std::string cnt_str = " [" + std::to_string(search_current_match_idx + 1) + "/" +
+                                  std::to_string(search_total_matches) + "]";
+            int rx = static_cast<int>(screen_w) - static_cast<int>(cnt_str.size()) - 1;
+            if (rx > 1 + static_cast<int>(search_input.size())) {
+                ncplane_set_fg_rgb8(stdplane, 140, 150, 175);
+                ncplane_putstr_yx(stdplane, y, rx, cnt_str.c_str());
+            }
+        } else if (!search_input.empty()) {
+            std::string not_found = " [Pattern not found]";
+            int rx = static_cast<int>(screen_w) - static_cast<int>(not_found.size()) - 1;
+            if (rx > 1 + static_cast<int>(search_input.size())) {
+                ncplane_set_fg_rgb8(stdplane, 240, 80, 80);
+                ncplane_putstr_yx(stdplane, y, rx, not_found.c_str());
+            }
         }
     } else {
         ncplane_set_fg_rgb8(stdplane, 240, 200, 100);

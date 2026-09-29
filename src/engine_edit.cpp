@@ -396,6 +396,20 @@ void ActionRegistry::init_default_actions() {
         }
     );
 
+    register_action("search_next", {"n"}, "Search", "Jump to next search match (n)",
+        [](ActionContext& ctx) {
+            ctx.engine.search_jump_next();
+            return true;
+        }
+    );
+
+    register_action("search_prev", {"N"}, "Search", "Jump to previous search match (N)",
+        [](ActionContext& ctx) {
+            ctx.engine.search_jump_prev();
+            return true;
+        }
+    );
+
     register_action("ripgrep", {"grep", "vg"}, "Search", "Search project with ripgrep (F11)",
         [](ActionContext& ctx) {
             std::string w = ctx.engine.get_word_under_cursor();
@@ -772,6 +786,15 @@ REGISTER_COMMAND(
 );
 
 REGISTER_COMMAND(
+    nohl,
+    (std::vector<std::string>{"nohl", "noh", "nohlsearch"}),
+    "Clear search pattern highlights (:noh)",
+    [](CommandContext& ctx) {
+        ctx.engine.clear_search_highlights();
+    }
+);
+
+REGISTER_COMMAND(
     workspace,
     (std::vector<std::string>{"ws", "workspace", "workspaces"}),
     "Open workspace manager popup (:ws [save|load|clear <slot>])",
@@ -1094,6 +1117,12 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
     // 9b. Workspace list popup
     if (show_workspace_list) {
         handle_workspace_list_input(ni, key);
+        return;
+    }
+
+    // 9c. Incremental buffer search prompt ('/')
+    if (search_active) {
+        handle_search_input(ni, key);
         return;
     }
 
@@ -3484,6 +3513,15 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
                 set_info_msg("Multi-Cursor: Reset to single primary cursor.");
             }
             break;
+        case '/':
+            open_search();
+            break;
+        case 'n':
+            search_jump_next();
+            break;
+        case 'N':
+            search_jump_prev();
+            break;
         case 'b':
             next_buffer();
             break;
@@ -3671,6 +3709,16 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
             break;
         case '$':
             for (auto& c : win.cursors) c.x = win.get_max_x(buf, c.y, mode);
+            break;
+        case '/':
+            mode = Mode::NORMAL;
+            open_search();
+            break;
+        case 'n':
+            search_jump_next();
+            break;
+        case 'N':
+            search_jump_prev();
             break;
         case 'g':
             s_visual_g_pending = true;

@@ -1143,6 +1143,331 @@ void VimEngine::render_hunk_diff(unsigned int screen_h, unsigned int screen_w) {
     ncplane_putstr_yx(stdplane, popup_y + popup_h - 1, popup_x + 3, footer.c_str());
 }
 
+struct SearchMatchPos {
+    int line{0};
+    int col{0};
+};
+
+static std::vector<SearchMatchPos> collect_search_matches(const TextBuffer& buf, const std::string& query) {
+    std::vector<SearchMatchPos> matches;
+    if (query.empty() || buf.lines.empty()) return matches;
+
+    bool has_upper = false;
+    for (char c : query) {
+        if (std::isupper(static_cast<unsigned char>(c))) {
+            has_upper = true;
+            break;
+        }
+    }
+
+    for (int y = 0; y < static_cast<int>(buf.lines.size()); ++y) {
+        const std::string& line = buf.lines[y];
+        if (line.empty()) continue;
+
+        size_t spos = 0;
+        while (spos < line.size()) {
+            size_t found = std::string::npos;
+            if (has_upper) {
+                found = line.find(query, spos);
+            } else {
+                auto it = std::search(line.begin() + spos, line.end(),
+                                      query.begin(), query.end(),
+                                      [](char a, char b) {
+                                          return std::tolower(static_cast<unsigned char>(a)) ==
+                                                 std::tolower(static_cast<unsigned char>(b));
+                                      });
+                if (it != line.end()) {
+                    found = std::distance(line.begin(), it);
+                }
+            }
+            if (found == std::string::npos) break;
+            matches.push_back({y, static_cast<int>(found)});
+            spos = found + std::max<size_t>(1, query.size());
+        }
+    }
+    return matches;
+}
+
+void VimEngine::open_search() {
+    search_active = true;
+    search_input.clear();
+    search_input_cursor = 0;
+    search_highlight_on = true;
+    search_total_matches = 0;
+    search_current_match_idx = -1;
+    if (!active_win().cursors.empty()) {
+        search_start_cursor = active_win().cursors.front();
+    } else {
+        search_start_cursor = {0, 0};
+    }
+    search_start_scroll = active_win().scroll_y;
+    set_info_msg("");
+}
+
+void VimEngine::update_search_incremental() {
+    if (search_input.empty()) {
+        search_total_matches = 0;
+        search_current_match_idx = -1;
+        active_win().cursors = {search_start_cursor};
+        active_win().scroll_y = search_start_scroll;
+        active_win().clamp_all_cursors(active_buf(), mode);
+        update_window_scroll(active_win(), active_buf());
+        return;
+    }
+
+    auto matches = collect_search_matches(active_buf(), search_input);
+    search_total_matches = static_cast<int>(matches.size());
+
+    if (matches.empty()) {
+        search_current_match_idx = -1;
+        return;
+    }
+
+    int target_idx = 0;
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (matches[i].line > search_start_cursor.y ||
+            (matches[i].line == search_start_cursor.y && matches[i].col >= search_start_cursor.x)) {
+            target_idx = static_cast<int>(i);
+            break;
+        }
+    }
+
+    search_current_match_idx = target_idx;
+    active_win().cursors = {{matches[target_idx].line, matches[target_idx].col}};
+    active_win().clamp_all_cursors(active_buf(), mode);
+    update_window_scroll(active_win(), active_buf());
+}
+
+void VimEngine::handle_search_input(const ncinput& ni, uint32_t key) {
+    if (key == NCKEY_ESC || Keymap::is_ctrl(ni, key, 'c')) {
+        search_active = false;
+        search_highlight_on = false;
+        search_input.clear();
+        search_input_cursor = 0;
+        active_win().cursors = {search_start_cursor};
+        active_win().scroll_y = search_start_scroll;
+        active_win().clamp_all_cursors(active_buf(), mode);
+        update_window_scroll(active_win(), active_buf());
+        set_info_msg("");
+        return;
+    }
+
+    if (key == NCKEY_ENTER || key == '\n' || key == '\r') {
+        search_active = false;
+        if (!search_input.empty()) {
+            search_query = search_input;
+            search_highlight_on = true;
+            auto matches = collect_search_matches(active_buf(), search_query);
+            search_total_matches = static_cast<int>(matches.size());
+            if (matches.empty()) {
+                search_current_match_idx = -1;
+                set_info_msg("Pattern not found: " + search_query);
+            } else {
+                int target_idx = 0;
+                for (size_t i = 0; i < matches.size(); ++i) {
+                    if (matches[i].line > search_start_cursor.y ||
+                        (matches[i].line == search_start_cursor.y && matches[i].col >= search_start_cursor.x)) {
+                        target_idx = static_cast<int>(i);
+                        break;
+                    }
+                }
+                search_current_match_idx = target_idx;
+                active_win().cursors = {{matches[target_idx].line, matches[target_idx].col}};
+                active_win().clamp_all_cursors(active_buf(), mode);
+                update_window_scroll(active_win(), active_buf());
+                set_info_msg("/" + search_query + " [" + std::to_string(target_idx + 1) + "/" +
+                             std::to_string(search_total_matches) + "]");
+            }
+        } else if (!search_query.empty()) {
+            search_highlight_on = true;
+            search_jump_next();
+        } else {
+            search_highlight_on = false;
+            set_info_msg("");
+        }
+        return;
+    }
+
+    if (key == NCKEY_BACKSPACE || key == 127 || key == '\b' || Keymap::is_ctrl(ni, key, 'h')) {
+        if (search_input_cursor > 0) {
+            search_input.erase(search_input_cursor - 1, 1);
+            search_input_cursor--;
+            update_search_incremental();
+        } else if (search_input.empty()) {
+            search_active = false;
+            search_highlight_on = false;
+            active_win().cursors = {search_start_cursor};
+            active_win().scroll_y = search_start_scroll;
+            active_win().clamp_all_cursors(active_buf(), mode);
+            update_window_scroll(active_win(), active_buf());
+            set_info_msg("");
+        }
+        return;
+    }
+
+    if (key == NCKEY_DEL || Keymap::is_ctrl(ni, key, 'd')) {
+        if (search_input_cursor < static_cast<int>(search_input.size())) {
+            search_input.erase(search_input_cursor, 1);
+            update_search_incremental();
+        }
+        return;
+    }
+
+    if (key == NCKEY_LEFT || Keymap::is_ctrl(ni, key, 'b')) {
+        if (search_input_cursor > 0) search_input_cursor--;
+        return;
+    }
+
+    if (key == NCKEY_RIGHT || Keymap::is_ctrl(ni, key, 'f')) {
+        if (search_input_cursor < static_cast<int>(search_input.size())) search_input_cursor++;
+        return;
+    }
+
+    if (key == NCKEY_HOME || Keymap::is_ctrl(ni, key, 'a')) {
+        search_input_cursor = 0;
+        return;
+    }
+
+    if (key == NCKEY_END || Keymap::is_ctrl(ni, key, 'e')) {
+        search_input_cursor = static_cast<int>(search_input.size());
+        return;
+    }
+
+    if (Keymap::is_ctrl(ni, key, 'u')) {
+        search_input.clear();
+        search_input_cursor = 0;
+        update_search_incremental();
+        return;
+    }
+
+    if (Keymap::is_ctrl(ni, key, 'w')) {
+        while (search_input_cursor > 0 && std::isspace(static_cast<unsigned char>(search_input[search_input_cursor - 1]))) {
+            search_input.erase(search_input_cursor - 1, 1);
+            search_input_cursor--;
+        }
+        while (search_input_cursor > 0 && !std::isspace(static_cast<unsigned char>(search_input[search_input_cursor - 1]))) {
+            search_input.erase(search_input_cursor - 1, 1);
+            search_input_cursor--;
+        }
+        update_search_incremental();
+        return;
+    }
+
+    if (Keymap::is_ctrl_shift(ni, key, 'v')) {
+        std::string clip = get_system_clipboard();
+        if (!clip.empty()) {
+            std::string flat;
+            for (char c : clip) {
+                if (c == '\r' || c == '\n') break;
+                flat += c;
+            }
+            if (!flat.empty()) {
+                search_input.insert(search_input_cursor, flat);
+                search_input_cursor += static_cast<int>(flat.size());
+                update_search_incremental();
+            }
+        }
+        return;
+    }
+
+    if (!ni.ctrl && !ni.alt) {
+        std::string ins = Keymap::get_input_text(ni, key);
+        if (!ins.empty()) {
+            search_input.insert(search_input_cursor, ins);
+            search_input_cursor += static_cast<int>(ins.size());
+            update_search_incremental();
+            return;
+        }
+    }
+}
+
+void VimEngine::search_jump_next() {
+    if (search_query.empty()) {
+        set_info_msg("No previous search pattern");
+        return;
+    }
+
+    search_highlight_on = true;
+    auto matches = collect_search_matches(active_buf(), search_query);
+    search_total_matches = static_cast<int>(matches.size());
+
+    if (matches.empty()) {
+        search_current_match_idx = -1;
+        set_info_msg("Pattern not found: " + search_query);
+        return;
+    }
+
+    Cursor cur = active_win().cursors.front();
+    int next_idx = -1;
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (matches[i].line > cur.y || (matches[i].line == cur.y && matches[i].col > cur.x)) {
+            next_idx = static_cast<int>(i);
+            break;
+        }
+    }
+
+    bool wrapped = false;
+    if (next_idx == -1) {
+        next_idx = 0;
+        wrapped = true;
+    }
+
+    search_current_match_idx = next_idx;
+    active_win().cursors = {{matches[next_idx].line, matches[next_idx].col}};
+    active_win().clamp_all_cursors(active_buf(), mode);
+    update_window_scroll(active_win(), active_buf());
+
+    std::string prefix = wrapped ? "Search hit BOTTOM, continuing at TOP " : "/";
+    set_info_msg(prefix + search_query + " [" + std::to_string(next_idx + 1) + "/" +
+                 std::to_string(search_total_matches) + "]");
+}
+
+void VimEngine::search_jump_prev() {
+    if (search_query.empty()) {
+        set_info_msg("No previous search pattern");
+        return;
+    }
+
+    search_highlight_on = true;
+    auto matches = collect_search_matches(active_buf(), search_query);
+    search_total_matches = static_cast<int>(matches.size());
+
+    if (matches.empty()) {
+        search_current_match_idx = -1;
+        set_info_msg("Pattern not found: " + search_query);
+        return;
+    }
+
+    Cursor cur = active_win().cursors.front();
+    int prev_idx = -1;
+    for (int i = static_cast<int>(matches.size()) - 1; i >= 0; --i) {
+        if (matches[i].line < cur.y || (matches[i].line == cur.y && matches[i].col < cur.x)) {
+            prev_idx = i;
+            break;
+        }
+    }
+
+    bool wrapped = false;
+    if (prev_idx == -1) {
+        prev_idx = static_cast<int>(matches.size()) - 1;
+        wrapped = true;
+    }
+
+    search_current_match_idx = prev_idx;
+    active_win().cursors = {{matches[prev_idx].line, matches[prev_idx].col}};
+    active_win().clamp_all_cursors(active_buf(), mode);
+    update_window_scroll(active_win(), active_buf());
+
+    std::string prefix = wrapped ? "Search hit TOP, continuing at BOTTOM " : "?";
+    set_info_msg(prefix + search_query + " [" + std::to_string(prev_idx + 1) + "/" +
+                 std::to_string(search_total_matches) + "]");
+}
+
+void VimEngine::clear_search_highlights() {
+    search_highlight_on = false;
+    set_info_msg("");
+}
+
 void VimEngine::open_filepicker() {
     show_whichkey_popup = false;
     show_git_hunk_popup = false;
