@@ -189,6 +189,7 @@ void ActionRegistry::init_default_actions() {
         [](ActionContext& ctx) {
             if (ctx.engine.active_buf().save_to_file()) {
                 ctx.engine.save_window_position(ctx.engine.active_win(), ctx.engine.active_buf());
+                ctx.engine.save_positions();
                 ctx.engine.get_config().save();
                 ctx.engine.set_info_msg("\"" + ctx.engine.active_buf().name + "\" written");
             } else {
@@ -2407,6 +2408,7 @@ void VimEngine::handle_whichkey_popup(const ncinput& ni, uint32_t key) {
         case 'w':
             if (buf.save_to_file("")) {
                 save_window_position(win, buf);
+                save_positions();
                 config.save();
                 set_info_msg("\"" + buf.name + "\" written");
             } else {
@@ -4982,6 +4984,7 @@ void VimEngine::execute_command(const std::string& cmd_str) {
         iss >> path;
         if (active_buf().save_to_file(path)) {
             save_window_position(active_win(), active_buf());
+            save_positions();
             config.save();
             set_info_msg("\"" + active_buf().name + "\" written");
         } else {
@@ -6538,11 +6541,9 @@ bool VimEngine::load_workspace(int slot, bool show_msg) {
         Window w;
         w.id = next_win_id++;
         w.buffer_idx = b_idx;
+        restore_window_position(w, *buffers[b_idx]);
         w.scroll_y = wsnap.scroll_y;
         w.scroll_x = wsnap.scroll_x;
-        int max_y = std::max(0, static_cast<int>(buffers[b_idx]->lines.size()) - 1);
-        int cy = std::clamp(wsnap.scroll_y, 0, max_y);
-        w.cursors = {{cy, 0}};
         w.clamp_all_cursors(*buffers[b_idx], mode);
         windows.push_back(w);
     }
@@ -6587,6 +6588,7 @@ bool VimEngine::save_workspace(int slot, bool show_msg) {
     for (const auto& w : windows) {
         if (w.buffer_idx < buffers.size()) {
             const auto& b = buffers[w.buffer_idx];
+            save_window_position(w, *b);
             WorkspaceWindowSnapshot wsnap;
             wsnap.file = !b->file_path.empty() ? b->file_path : b->name;
             wsnap.scroll_y = w.scroll_y;
@@ -6594,6 +6596,8 @@ bool VimEngine::save_workspace(int slot, bool show_msg) {
             snap.windows.push_back(wsnap);
         }
     }
+    save_positions();
+    config.save();
 
     bool ok = storage.save_snapshot(slot, snap);
     if (ok) {

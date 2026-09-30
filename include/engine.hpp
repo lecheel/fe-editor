@@ -333,6 +333,13 @@ public:
     void handle_workspace_list_input(const ncinput& ni, uint32_t key);
     void render_workspace_list(unsigned int screen_h, unsigned int screen_w);
 
+    std::unordered_map<std::string, FilePosition> file_positions;
+    std::string get_position_path() const;
+    void load_positions();
+    void save_positions();
+    std::string normalize_position_key(const std::string& key) const;
+    void set_file_position(const std::string& key, int y, int x, int scroll_y);
+    bool get_file_position(const std::string& key, FilePosition& pos) const;
     void save_window_position(const Window& win, const TextBuffer& buf);
     void restore_window_position(Window& win, const TextBuffer& buf);
     void save_all_positions();

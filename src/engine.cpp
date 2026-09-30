@@ -15,6 +15,19 @@ namespace fs = std::filesystem;
 
 namespace {
 
+std::string escape_json_value(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '"') out += "\\\"";
+        else if (c == '\\') out += "\\\\";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') out += "\\r";
+        else if (c == '\t') out += "\\t";
+        else out += c;
+    }
+    return out;
+}
+
 struct FileLocationTarget {
     std::string path;
     int line = -1; // 1-based, -1 if unspecified
@@ -173,6 +186,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
     setlocale(LC_ALL, "");
 
     config.load();
+    load_positions();
     keymap.load(config.get_config_dir());
     HelixTheme::instance().load_theme(config.settings.theme.empty() ? "dark_plus" : config.settings.theme, config.get_config_dir());
 
@@ -348,7 +362,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
                     tx = std::clamp(target.col - 1, 0, static_cast<int>(buffers[i]->lines[ty].size()));
                 }
                 std::string key = !buffers[i]->file_path.empty() ? buffers[i]->file_path : buffers[i]->name;
-                config.set_position(key, ty, tx, 0);
+                set_file_position(key, ty, tx, 0);
 
                 if (i == 0) {
                     w.cursors = {{ty, tx}};
@@ -444,17 +458,182 @@ VimEngine::~VimEngine() {
     Log::shutdown();
 }
 
+std::string VimEngine::get_position_path() const {
+    return (fs::path(config.get_config_dir()) / "position.json").string();
+}
+
+std::string VimEngine::normalize_position_key(const std::string& key) const {
+    if (key.empty()) return "";
+    std::error_code ec;
+    fs::path p(key);
+    if (fs::exists(p, ec)) {
+        auto canon = fs::canonical(p, ec);
+        if (!ec) return canon.string();
+    }
+    return p.lexically_normal().string();
+}
+
+void VimEngine::set_file_position(const std::string& key, int y, int x, int scroll_y) {
+    if (key.empty()) return;
+    std::string norm = normalize_position_key(key);
+    FilePosition fp{y, x, scroll_y};
+    file_positions[norm] = fp;
+    if (norm != key) {
+        file_positions[key] = fp;
+    }
+}
+
+bool VimEngine::get_file_position(const std::string& key, FilePosition& pos) const {
+    if (key.empty()) return false;
+    auto it = file_positions.find(key);
+    if (it != file_positions.end()) {
+        pos = it->second;
+        return true;
+    }
+    std::string norm = normalize_position_key(key);
+    it = file_positions.find(norm);
+    if (it != file_positions.end()) {
+        pos = it->second;
+        return true;
+    }
+    // Fallback: match by filename if path prefix differs
+    std::string fn = fs::path(key).filename().string();
+    for (const auto& kv : file_positions) {
+        if (fs::path(kv.first).filename().string() == fn) {
+            pos = kv.second;
+            return true;
+        }
+    }
+    return false;
+}
+
+void VimEngine::load_positions() {
+    file_positions.clear();
+    std::string path = get_position_path();
+    std::ifstream in(path);
+    if (!in.is_open()) return;
+
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string text = ss.str();
+
+    struct PosToken {
+        enum Type { LBRACE, RBRACE, COLON, COMMA, STRING, NUMBER, OTHER } type;
+        std::string value;
+    };
+
+    std::vector<PosToken> tokens;
+    size_t i = 0;
+    while (i < text.size()) {
+        char c = text[i];
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            i++;
+            continue;
+        }
+        if (c == '{') {
+            tokens.push_back({PosToken::LBRACE, "{"});
+            i++;
+        } else if (c == '}') {
+            tokens.push_back({PosToken::RBRACE, "}"});
+            i++;
+        } else if (c == ':') {
+            tokens.push_back({PosToken::COLON, ":"});
+            i++;
+        } else if (c == ',') {
+            tokens.push_back({PosToken::COMMA, ","});
+            i++;
+        } else if (c == '"') {
+            i++;
+            std::string s;
+            while (i < text.size()) {
+                if (text[i] == '\\' && i + 1 < text.size()) {
+                    s += text[i + 1];
+                    i += 2;
+                } else if (text[i] == '"') {
+                    i++;
+                    break;
+                } else {
+                    s += text[i++];
+                }
+            }
+            tokens.push_back({PosToken::STRING, s});
+        } else if (std::isdigit(static_cast<unsigned char>(c)) || c == '-') {
+            std::string num;
+            while (i < text.size() && (std::isdigit(static_cast<unsigned char>(text[i])) ||
+                                       text[i] == '-' || text[i] == '.')) {
+                num += text[i++];
+            }
+            tokens.push_back({PosToken::NUMBER, num});
+        } else {
+            i++;
+        }
+    }
+
+    size_t idx = 0;
+    while (idx < tokens.size()) {
+        if (tokens[idx].type == PosToken::STRING &&
+            idx + 2 < tokens.size() &&
+            tokens[idx + 1].type == PosToken::COLON &&
+            tokens[idx + 2].type == PosToken::LBRACE) {
+
+            std::string file_key = tokens[idx].value;
+            idx += 3;
+
+            FilePosition fp{0, 0, 0};
+            while (idx < tokens.size() && tokens[idx].type != PosToken::RBRACE) {
+                if (tokens[idx].type == PosToken::STRING &&
+                    idx + 2 < tokens.size() &&
+                    tokens[idx + 1].type == PosToken::COLON &&
+                    tokens[idx + 2].type == PosToken::NUMBER) {
+                    std::string prop = tokens[idx].value;
+                    int val = 0;
+                    try { val = std::stoi(tokens[idx + 2].value); } catch (...) {}
+                    if (prop == "y" || prop == "line") fp.y = val;
+                    else if (prop == "x" || prop == "col") fp.x = val;
+                    else if (prop == "scroll_y") fp.scroll_y = val;
+                    idx += 3;
+                    continue;
+                }
+                idx++;
+            }
+            if (file_key != "positions") {
+                file_positions[file_key] = fp;
+            }
+        }
+        idx++;
+    }
+}
+
+void VimEngine::save_positions() {
+    std::string path = get_position_path();
+    std::error_code ec;
+    fs::create_directories(config.get_config_dir(), ec);
+    std::ofstream out(path);
+    if (!out.is_open()) return;
+
+    out << "{\n";
+    size_t count = 0;
+    for (auto it = file_positions.begin(); it != file_positions.end(); ++it, ++count) {
+        out << "  \"" << escape_json_value(it->first) << "\": {\n";
+        out << "    \"y\": " << it->second.y << ",\n";
+        out << "    \"x\": " << it->second.x << ",\n";
+        out << "    \"scroll_y\": " << it->second.scroll_y << "\n";
+        out << "  }" << (count + 1 < file_positions.size() ? "," : "") << "\n";
+    }
+    out << "}\n";
+}
+
 void VimEngine::save_window_position(const Window& win, const TextBuffer& buf) {
     if (win.cursors.empty()) return;
     Cursor primary = win.cursors.front();
     std::string key = !buf.file_path.empty() ? buf.file_path : buf.name;
-    config.set_position(key, primary.y, primary.x, win.scroll_y);
+    set_file_position(key, primary.y, primary.x, win.scroll_y);
 }
 
 void VimEngine::restore_window_position(Window& win, const TextBuffer& buf) {
     std::string key = !buf.file_path.empty() ? buf.file_path : buf.name;
     FilePosition pos;
-    if (config.get_position(key, pos)) {
+    if (get_file_position(key, pos)) {
         win.cursors = {{pos.y, pos.x}};
         win.scroll_y = pos.scroll_y;
     } else {
@@ -470,6 +649,7 @@ void VimEngine::save_all_positions() {
             save_window_position(win, *buffers[win.buffer_idx]);
         }
     }
+    save_positions();
 }
 
 void VimEngine::set_info_msg(std::string msg) {
