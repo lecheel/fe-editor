@@ -334,9 +334,11 @@ public:
     void render_workspace_list(unsigned int screen_h, unsigned int screen_w);
 
     std::unordered_map<std::string, FilePosition> file_positions;
+    std::vector<std::string> position_order;
     std::string get_position_path() const;
     void load_positions();
     void save_positions();
+    void housekeep_positions();
     std::string normalize_position_key(const std::string& key) const;
     void set_file_position(const std::string& key, int y, int x, int scroll_y);
     bool get_file_position(const std::string& key, FilePosition& pos) const;

@@ -473,13 +473,53 @@ std::string VimEngine::normalize_position_key(const std::string& key) const {
     return p.lexically_normal().string();
 }
 
+void VimEngine::housekeep_positions() {
+    // 1. Clean up entries for absolute paths that no longer exist
+    for (auto it = position_order.begin(); it != position_order.end(); ) {
+        const std::string& p = *it;
+        if (!p.empty() && (p[0] == '/' || p.find(":\\") != std::string::npos)) {
+            std::error_code ec;
+            if (!fs::exists(p, ec)) {
+                file_positions.erase(p);
+                it = position_order.erase(it);
+                continue;
+            }
+        }
+        ++it;
+    }
+
+    // 2. Cap at most 100 items, pruning the oldest (LRU)
+    while (position_order.size() > 100) {
+        std::string oldest = position_order.front();
+        position_order.erase(position_order.begin());
+        file_positions.erase(oldest);
+    }
+
+    // Remove any orphaned keys in file_positions not in position_order
+    for (auto it = file_positions.begin(); it != file_positions.end(); ) {
+        if (std::find(position_order.begin(), position_order.end(), it->first) == position_order.end()) {
+            it = file_positions.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void VimEngine::set_file_position(const std::string& key, int y, int x, int scroll_y) {
     if (key.empty()) return;
     std::string norm = normalize_position_key(key);
     FilePosition fp{y, x, scroll_y};
     file_positions[norm] = fp;
-    if (norm != key) {
-        file_positions[key] = fp;
+
+    // Track most recently accessed at the back
+    auto it = std::find(position_order.begin(), position_order.end(), norm);
+    if (it != position_order.end()) {
+        position_order.erase(it);
+    }
+    position_order.push_back(norm);
+
+    if (position_order.size() > 100) {
+        housekeep_positions();
     }
 }
 
@@ -509,6 +549,7 @@ bool VimEngine::get_file_position(const std::string& key, FilePosition& pos) con
 
 void VimEngine::load_positions() {
     file_positions.clear();
+    position_order.clear();
     std::string path = get_position_path();
     std::ifstream in(path);
     if (!in.is_open()) return;
@@ -597,28 +638,46 @@ void VimEngine::load_positions() {
                 idx++;
             }
             if (file_key != "positions") {
-                file_positions[file_key] = fp;
+                std::string norm = normalize_position_key(file_key);
+                file_positions[norm] = fp;
+                if (std::find(position_order.begin(), position_order.end(), norm) == position_order.end()) {
+                    position_order.push_back(norm);
+                }
             }
         }
         idx++;
     }
+
+    if (position_order.size() > 100) {
+        housekeep_positions();
+    }
 }
 
 void VimEngine::save_positions() {
+    housekeep_positions();
+
     std::string path = get_position_path();
     std::error_code ec;
     fs::create_directories(config.get_config_dir(), ec);
     std::ofstream out(path);
     if (!out.is_open()) return;
 
+    std::vector<std::pair<std::string, FilePosition>> to_save;
+    to_save.reserve(position_order.size());
+    for (const auto& key : position_order) {
+        auto it = file_positions.find(key);
+        if (it != file_positions.end()) {
+            to_save.push_back({key, it->second});
+        }
+    }
+
     out << "{\n";
-    size_t count = 0;
-    for (auto it = file_positions.begin(); it != file_positions.end(); ++it, ++count) {
-        out << "  \"" << escape_json_value(it->first) << "\": {\n";
-        out << "    \"y\": " << it->second.y << ",\n";
-        out << "    \"x\": " << it->second.x << ",\n";
-        out << "    \"scroll_y\": " << it->second.scroll_y << "\n";
-        out << "  }" << (count + 1 < file_positions.size() ? "," : "") << "\n";
+    for (size_t i = 0; i < to_save.size(); ++i) {
+        out << "  \"" << escape_json_value(to_save[i].first) << "\": {\n";
+        out << "    \"y\": " << to_save[i].second.y << ",\n";
+        out << "    \"x\": " << to_save[i].second.x << ",\n";
+        out << "    \"scroll_y\": " << to_save[i].second.scroll_y << "\n";
+        out << "  }" << (i + 1 < to_save.size() ? "," : "") << "\n";
     }
     out << "}\n";
 }
