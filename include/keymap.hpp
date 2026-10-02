@@ -224,6 +224,21 @@ inline char get_shifted_ascii(char ch) {
     }
 }
 
+// If Shift is held and the key is a printable ASCII char, return its shifted
+// form (e.g. '6' -> '^', ';' -> ':', 'g' -> 'G'). Otherwise return key
+// unchanged. Called once at the top of handle_key_input so downstream handlers
+// can match on the shifted glyph directly and drop per-case
+// `ni.shift && (key == '6' || ni.id == '6')` fallbacks.
+inline uint32_t resolve_shifted(const ncinput& ni, uint32_t key) {
+    if (!ni.ctrl && !ni.alt && ni.shift) {
+        uint32_t raw = (key >= 32 && key < 127) ? key : ni.id;
+        if (raw >= 32 && raw < 127) {
+            return static_cast<uint32_t>(get_shifted_ascii(static_cast<char>(raw)));
+        }
+    }
+    return key;
+}
+
 inline std::string get_input_text(const ncinput& ni, uint32_t key) {
     if (ni.ctrl || ni.alt) return "";
 

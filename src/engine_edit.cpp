@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <map>
 #include <set>
+#include <functional>
+#include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
 #include <cstdlib>
@@ -981,12 +983,7 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (!ni.ctrl && !ni.alt && ni.shift) {
-        uint32_t raw = (key >= 32 && key < 127) ? key : ni.id;
-        if (raw >= 32 && raw < 127) {
-            key = static_cast<uint32_t>(Keymap::get_shifted_ascii(static_cast<char>(raw)));
-        }
-    }
+    key = Keymap::resolve_shifted(ni, key);
 
     bool popup_active = show_git_status ||
                         show_hunk_diff ||
@@ -3233,50 +3230,37 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
             return;
         }
         s_d_pending = false;
-        if (key == 'd') {
-            execute_dot_command(*this, DotCommand::DD, false);
-            return;
-        } else if (key == 'w') {
-            execute_dot_command(*this, DotCommand::DW, false);
-            return;
-        } else if (key == 'b') {
-            execute_dot_command(*this, DotCommand::DB, false);
-            return;
-        } else if (key == 'e') {
-            execute_dot_command(*this, DotCommand::DE, false);
-            return;
-        } else if (key == 'j' || key == NCKEY_DOWN) {
-            execute_dot_command(*this, DotCommand::DJ, false);
-            return;
-        } else if (key == 'k' || key == NCKEY_UP) {
-            execute_dot_command(*this, DotCommand::DK, false);
-            return;
-        } else if (key == 'x' || key == 'l' || key == ' ' || key == NCKEY_DEL) {
-            execute_dot_command(*this, DotCommand::X, false);
-            return;
-        } else if (key == 'h' || key == NCKEY_BACKSPACE || key == 127 || key == '\b') {
-            execute_dot_command(*this, DotCommand::CAP_X, false);
-            return;
-        } else if (key == '^' || (ni.shift && (key == '6' || ni.id == '6'))) {
-            execute_dot_command(*this, DotCommand::D_CARET, false);
-            return;
-        } else if (key == '0') {
-            execute_dot_command(*this, DotCommand::D_TOP, false);
-            return;
-        } else if (key == 'G' || ni.id == 'G' || (ni.shift && (key == 'g' || ni.id == 'g'))) {
-            execute_dot_command(*this, DotCommand::D_END, false);
-            return;
-        } else if (key == 'g') {
+        // 'g' is special: it starts a nested "dg" pending sub-state that is
+        // resolved on the next key (e.g. "dgg" -> delete to top of file).
+        if (key == 'g') {
             s_dg_pending = true;
             set_info_msg("dg");
             return;
-        } else if (key == '$' || (ni.shift && (key == '4' || ni.id == '4'))) {
-            execute_dot_command(*this, DotCommand::D_DOLLAR, false);
-            return;
-        } else {
-            set_info_msg("");
-            if (key == NCKEY_ESC) return;
         }
+        // Single-key -> DotCommand lookup. resolve_shifted() at the top of
+        // handle_key_input has already normalized shift+6 -> '^', shift+4 ->
+        // '$', shift+g -> 'G', so the table keys the shifted glyph directly
+        // and we no longer need per-case ni.shift fallbacks.
+        static const std::unordered_map<uint32_t, DotCommand> d_dispatch = {
+            {'d', DotCommand::DD}, {'w', DotCommand::DW}, {'b', DotCommand::DB},
+            {'e', DotCommand::DE},
+            {'j', DotCommand::DJ}, {NCKEY_DOWN,  DotCommand::DJ},
+            {'k', DotCommand::DK}, {NCKEY_UP,    DotCommand::DK},
+            {'x', DotCommand::X},  {'l', DotCommand::X},  {' ', DotCommand::X},
+            {NCKEY_DEL, DotCommand::X},
+            {'h', DotCommand::CAP_X}, {NCKEY_BACKSPACE, DotCommand::CAP_X},
+            {127, DotCommand::CAP_X}, {'\b', DotCommand::CAP_X},
+            {'^', DotCommand::D_CARET},
+            {'0', DotCommand::D_TOP},
+            {'G', DotCommand::D_END},
+            {'$', DotCommand::D_DOLLAR},
+        };
+        if (auto it = d_dispatch.find(key); it != d_dispatch.end()) {
+            execute_dot_command(*this, it->second, false);
+            return;
+        }
+        set_info_msg("");
+        if (key == NCKEY_ESC) return;
     }
 
     if (s_dg_pending) {
@@ -3531,7 +3515,7 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (key == 23 || is_ctrl(ni, key, 'w')) {
+    if (is_ctrl(ni, key, 'w')) {
         ctrl_w_pending = true;
         leader_pending = false;
         ctrl_w_start_time = std::chrono::steady_clock::now();
@@ -3541,7 +3525,7 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (key == 22 || (ni.ctrl && (ni.id == 'v' || ni.id == 'V'))) {
+    if (is_ctrl(ni, key, 'v')) {
         mode = Mode::VISUAL_BLOCK;
         win.visual_anchor = win.cursors.front();
         win.cursors = {win.cursors.front()};
@@ -3968,7 +3952,7 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (key == 23 || is_ctrl(ni, key, 'w')) {
+    if (is_ctrl(ni, key, 'w')) {
         ctrl_w_pending = true;
         leader_pending = false;
         ctrl_w_start_time = std::chrono::steady_clock::now();
@@ -5055,6 +5039,51 @@ bool VimEngine::execute_substitute(const std::string& cmd_str) {
     return true;
 }
 
+namespace {
+
+bool is_all_digits(const std::string& s) {
+    if (s.empty()) return false;
+    for (char c : s) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    }
+    return true;
+}
+
+// Parses "path:line" and "path:line:col" suffixes. Leaves `path` untouched when
+// the suffix is not numeric or when the full string names an existing file and
+// the stripped one does not.
+void split_path_line_col(std::string& path, int& line, int& col) {
+    size_t last_colon = path.rfind(':');
+    if (last_colon == std::string::npos || last_colon == 0) return;
+
+    std::string part1 = path.substr(last_colon + 1);
+    if (!is_all_digits(part1)) return;
+
+    std::error_code ec;
+    size_t prev_colon = path.rfind(':', last_colon - 1);
+    if (prev_colon != std::string::npos && prev_colon > 0) {
+        std::string part2 = path.substr(prev_colon + 1, last_colon - prev_colon - 1);
+        if (!is_all_digits(part2)) return;
+        std::string ppath = path.substr(0, prev_colon);
+        if (!fs::exists(path, ec) || fs::exists(ppath, ec)) {
+            path = ppath;
+            try { line = std::stoi(part2); } catch (...) {}
+            try { col = std::stoi(part1); } catch (...) {}
+        }
+        return;
+    }
+
+    std::string ppath = path.substr(0, last_colon);
+    if (!fs::exists(path, ec) || fs::exists(ppath, ec)) {
+        path = ppath;
+        try { line = std::stoi(part1); } catch (...) {}
+    }
+}
+
+using ExCommandFn = std::function<void(VimEngine&, std::istringstream&)>;
+
+} // namespace
+
 void VimEngine::execute_command(const std::string& cmd_str) {
     close_cmd_completion();
     std::istringstream iss(cmd_str);
@@ -5071,43 +5100,64 @@ void VimEngine::execute_command(const std::string& cmd_str) {
         return;
     }
 
-    if (cmd == "q") {
-        if (active_buf().modified) {
-            set_info_msg("E37: No write since last change (add ! to override)");
-        } else {
-            save_all_positions();
-            config.save();
-            running = false;
-        }
-    } else if (cmd == "q!") {
-        save_all_positions();
-        config.save();
-        running = false;
-    } else if (cmd == "w") {
-        std::string path;
-        iss >> path;
-        if (active_buf().save_to_file(path)) {
-            save_window_position(active_win(), active_buf());
-            save_positions();
-            config.save();
-            set_info_msg("\"" + active_buf().name + "\" written");
-        } else {
-            set_info_msg("E212: Can't open file for writing");
-        }
-    } else if (cmd == "wq" || cmd == "x") {
-        std::string path;
-        iss >> path;
-        if (active_buf().save_to_file(path)) {
-            save_all_positions();
-            config.save();
-            running = false;
-        } else {
-            set_info_msg("E212: Can't open file for writing");
-        }
-    } else if (cmd == "e" || cmd == "edit") {
-        std::string raw_arg;
-        iss >> raw_arg;
-        if (!raw_arg.empty()) {
+    // Built-in ex commands: one handler per command, looked up by name/alias.
+    // Lambdas are defined inside a member function, so they keep access to
+    // VimEngine's private members through `self`.
+    static const std::unordered_map<std::string, ExCommandFn> ex_table = [] {
+        std::unordered_map<std::string, ExCommandFn> t;
+        auto reg = [&t](std::initializer_list<const char*> names, ExCommandFn fn) {
+            for (const char* n : names) t[n] = fn;
+        };
+
+        reg({"q"}, [](VimEngine& self, std::istringstream&) {
+            if (self.active_buf().modified) {
+                self.set_info_msg("E37: No write since last change (add ! to override)");
+                return;
+            }
+            self.save_all_positions();
+            self.config.save();
+            self.running = false;
+        });
+
+        reg({"q!"}, [](VimEngine& self, std::istringstream&) {
+            self.save_all_positions();
+            self.config.save();
+            self.running = false;
+        });
+
+        reg({"w"}, [](VimEngine& self, std::istringstream& args) {
+            std::string path;
+            args >> path;
+            if (!self.active_buf().save_to_file(path)) {
+                self.set_info_msg("E212: Can't open file for writing");
+                return;
+            }
+            self.save_window_position(self.active_win(), self.active_buf());
+            self.save_positions();
+            self.config.save();
+            self.set_info_msg("\"" + self.active_buf().name + "\" written");
+        });
+
+        reg({"wq", "x"}, [](VimEngine& self, std::istringstream& args) {
+            std::string path;
+            args >> path;
+            if (!self.active_buf().save_to_file(path)) {
+                self.set_info_msg("E212: Can't open file for writing");
+                return;
+            }
+            self.save_all_positions();
+            self.config.save();
+            self.running = false;
+        });
+
+        reg({"e", "edit"}, [](VimEngine& self, std::istringstream& args) {
+            std::string raw_arg;
+            args >> raw_arg;
+            if (raw_arg.empty()) {
+                self.set_info_msg("E471: Argument required");
+                return;
+            }
+
             std::string path = raw_arg;
             int target_line = -1;
             int target_col = -1;
@@ -5120,136 +5170,131 @@ void VimEngine::execute_command(const std::string& cmd_str) {
                 } else {
                     try { target_line = std::stoi(raw_arg.substr(1)); } catch (...) {}
                 }
-                iss >> path;
+                args >> path;
             }
 
-            if (!path.empty()) {
-                size_t last_colon = path.rfind(':');
-                if (last_colon != std::string::npos && last_colon > 0) {
-                    std::string part1 = path.substr(last_colon + 1);
-                    auto is_num = [](const std::string& s) {
-                        if (s.empty()) return false;
-                        for (char c : s) if (!std::isdigit(static_cast<unsigned char>(c))) return false;
-                        return true;
-                    };
-                    if (is_num(part1)) {
-                        size_t prev_colon = path.rfind(':', last_colon - 1);
-                        if (prev_colon != std::string::npos && prev_colon > 0) {
-                            std::string part2 = path.substr(prev_colon + 1, last_colon - prev_colon - 1);
-                            if (is_num(part2)) {
-                                std::string ppath = path.substr(0, prev_colon);
-                                std::error_code ec;
-                                if (!fs::exists(path, ec) || fs::exists(ppath, ec)) {
-                                    path = ppath;
-                                    try { target_line = std::stoi(part2); } catch (...) {}
-                                    try { target_col = std::stoi(part1); } catch (...) {}
-                                }
-                            }
-                        } else {
-                            std::string ppath = path.substr(0, last_colon);
-                            std::error_code ec;
-                            if (!fs::exists(path, ec) || fs::exists(ppath, ec)) {
-                                path = ppath;
-                                try { target_line = std::stoi(part1); } catch (...) {}
-                            }
-                        }
-                    }
-                }
+            if (path.empty()) {
+                self.set_info_msg("E471: Argument required");
+                return;
+            }
 
-                save_window_position(active_win(), active_buf());
-                size_t found_idx = buffers.size();
-                for (size_t i = 0; i < buffers.size(); ++i) {
-                    if (buffers[i]->file_path == path || buffers[i]->name == path) {
-                        found_idx = i;
-                        break;
-                    }
-                }
-                if (found_idx == buffers.size()) {
-                    buffers.push_back(TextBuffer::from_file(path));
-                    found_idx = buffers.size() - 1;
-                }
-                active_win().buffer_idx = found_idx;
-                restore_window_position(active_win(), active_buf());
+            split_path_line_col(path, target_line, target_col);
 
-                if (target_line > 0) {
-                    int ty = std::clamp(target_line - 1, 0, std::max(0, static_cast<int>(active_buf().lines.size()) - 1));
-                    int tx = 0;
-                    if (target_col > 0 && ty < static_cast<int>(active_buf().lines.size())) {
-                        tx = std::clamp(target_col - 1, 0, static_cast<int>(active_buf().lines[ty].size()));
-                    }
-                    active_win().cursors = {{ty, tx}};
-                    active_win().clamp_all_cursors(active_buf(), mode);
-                    update_window_scroll(active_win(), active_buf());
-                }
+            auto& win = self.active_win();
+            self.save_window_position(win, self.active_buf());
 
-                set_info_msg("\"" + active_buf().name + "\" [" + std::to_string(active_buf().lines.size()) + " lines]");
+            size_t found_idx = self.buffers.size();
+            for (size_t i = 0; i < self.buffers.size(); ++i) {
+                if (self.buffers[i]->file_path == path || self.buffers[i]->name == path) {
+                    found_idx = i;
+                    break;
+                }
+            }
+            if (found_idx == self.buffers.size()) {
+                self.buffers.push_back(TextBuffer::from_file(path));
+                found_idx = self.buffers.size() - 1;
+            }
+            win.buffer_idx = found_idx;
+            self.restore_window_position(win, self.active_buf());
+
+            if (target_line > 0) {
+                auto& buf = self.active_buf();
+                int ty = std::clamp(target_line - 1, 0, std::max(0, static_cast<int>(buf.lines.size()) - 1));
+                int tx = 0;
+                if (target_col > 0 && ty < static_cast<int>(buf.lines.size())) {
+                    tx = std::clamp(target_col - 1, 0, static_cast<int>(buf.lines[ty].size()));
+                }
+                win.cursors = {{ty, tx}};
+                win.clamp_all_cursors(buf, self.mode);
+                self.update_window_scroll(win, buf);
+            }
+
+            self.set_info_msg("\"" + self.active_buf().name + "\" [" +
+                              std::to_string(self.active_buf().lines.size()) + " lines]");
+        });
+
+        reg({"git", "gitstatus", "gitview", "gs"},
+            [](VimEngine& self, std::istringstream&) { self.open_git_status(); });
+
+        reg({"sp", "split"},
+            [](VimEngine& self, std::istringstream&) { self.split_window(SplitType::HORIZONTAL); });
+
+        reg({"vsp", "vsplit"},
+            [](VimEngine& self, std::istringstream&) { self.split_window(SplitType::VERTICAL); });
+
+        reg({"bn", "bnext"},
+            [](VimEngine& self, std::istringstream&) { self.next_buffer(); });
+
+        reg({"bp", "bprev"},
+            [](VimEngine& self, std::istringstream&) { self.prev_buffer(); });
+
+        reg({"b"}, [](VimEngine& self, std::istringstream& args) {
+            size_t idx;
+            if (args >> idx && idx >= 1 && idx <= self.buffers.size()) {
+                self.switch_to_buffer(idx - 1);
             } else {
-                set_info_msg("E471: Argument required");
+                self.open_buffer_list();
             }
-        } else {
-            set_info_msg("E471: Argument required");
-        }
-    } else if (cmd == "git" || cmd == "gitstatus" || cmd == "gitview" || cmd == "gs") {
-        open_git_status();
-    } else if (cmd == "sp" || cmd == "split") {
-        split_window(SplitType::HORIZONTAL);
-    } else if (cmd == "vsp" || cmd == "vsplit") {
-        split_window(SplitType::VERTICAL);
-    } else if (cmd == "bn" || cmd == "bnext") {
-        next_buffer();
-    } else if (cmd == "bp" || cmd == "bprev") {
-        prev_buffer();
-    } else if (cmd == "b") {
-        size_t idx;
-        if (iss >> idx && idx >= 1 && idx <= buffers.size()) {
-            switch_to_buffer(idx - 1);
-        } else {
-            open_buffer_list();
-        }
-    } else if (cmd == "ls" || cmd == "buffers") {
-        open_buffer_list();
-    } else if (cmd == "vg" || cmd == "vimgrep" || cmd == "rg") {
-        std::string pattern;
-        std::string word;
-        while (iss >> word) {
-            if (!pattern.empty()) pattern += " ";
-            pattern += word;
-        }
-        if (!pattern.empty()) {
-            run_ripgrep(pattern);
-        } else {
+        });
+
+        reg({"ls", "buffers"},
+            [](VimEngine& self, std::istringstream&) { self.open_buffer_list(); });
+
+        reg({"vg", "vimgrep", "rg"}, [](VimEngine& self, std::istringstream& args) {
+            std::string pattern;
+            std::string word;
+            while (args >> word) {
+                if (!pattern.empty()) pattern += " ";
+                pattern += word;
+            }
+            if (!pattern.empty()) {
+                self.run_ripgrep(pattern);
+                return;
+            }
             // :vg without pattern reuses previous search from rg_search.json
-            if (!rg_groups.empty()) {
-                show_rg_popup = true;
-                set_info_msg("Ripgrep: \"" + rg_query + "\" (" + std::to_string(rg_flattened_matches.size()) + " matches)");
-            } else {
-                std::string c_word = get_word_under_cursor();
-                if (!c_word.empty()) {
-                    run_ripgrep(c_word);
-                } else {
-                    set_info_msg("No previous search results. Usage: :vg <pattern>");
-                }
+            if (!self.rg_groups.empty()) {
+                self.show_rg_popup = true;
+                self.set_info_msg("Ripgrep: \"" + self.rg_query + "\" (" +
+                                  std::to_string(self.rg_flattened_matches.size()) + " matches)");
+                return;
             }
-        }
-    } else if (cmd == "pwd" || cmd == "proj" || cmd == "project") {
-        set_info_msg("Project [" + project_name + "]: " + project_dir);
-    } else if (cmd == "cd") {
-        std::string dir;
-        iss >> dir;
-        if (dir.empty()) dir = project_dir;
-        std::error_code ec;
-        fs::current_path(dir, ec);
-        if (!ec) {
-            project_dir = detect_project_dir(dir);
-            try { project_name = fs::path(project_dir).filename().string(); } catch (...) {}
-            if (project_name.empty()) project_name = "fe";
-            set_info_msg("Directory changed to: " + dir + " (Project: " + project_name + ")");
-        } else {
-            set_info_msg("E344: Can't find directory " + dir);
-        }
-    } else {
+            std::string c_word = self.get_word_under_cursor();
+            if (!c_word.empty()) {
+                self.run_ripgrep(c_word);
+            } else {
+                self.set_info_msg("No previous search results. Usage: :vg <pattern>");
+            }
+        });
+
+        reg({"pwd", "proj", "project"}, [](VimEngine& self, std::istringstream&) {
+            self.set_info_msg("Project [" + self.project_name + "]: " + self.project_dir);
+        });
+
+        reg({"cd"}, [](VimEngine& self, std::istringstream& args) {
+            std::string dir;
+            args >> dir;
+            if (dir.empty()) dir = self.project_dir;
+            std::error_code ec;
+            fs::current_path(dir, ec);
+            if (ec) {
+                self.set_info_msg("E344: Can't find directory " + dir);
+                return;
+            }
+            self.project_dir = detect_project_dir(dir);
+            try { self.project_name = fs::path(self.project_dir).filename().string(); } catch (...) {}
+            if (self.project_name.empty()) self.project_name = "fe";
+            self.set_info_msg("Directory changed to: " + dir + " (Project: " + self.project_name + ")");
+        });
+
+        return t;
+    }();
+
+    auto it = ex_table.find(cmd);
+    if (it == ex_table.end()) {
         set_info_msg("E492: Not an editor command: " + cmd);
+        return;
     }
+    it->second(*this, iss);
 }
 
 void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
