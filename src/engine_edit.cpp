@@ -2018,6 +2018,8 @@ void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
     if (is_backspace(ni, key)) {
         if (!filepicker_query.empty()) {
             filepicker_query.pop_back();
+            filepicker_selected_idx = 0;
+            filepicker_scroll = 0;
             filter_filepicker_files();
         } else if (filepicker_tree_mode && !filepicker_cur_dir.empty()) {
             size_t slash = filepicker_cur_dir.find_last_of("/\\");
@@ -2036,6 +2038,8 @@ void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
 
     if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
         filepicker_query += static_cast<char>(key);
+        filepicker_selected_idx = 0;
+        filepicker_scroll = 0;
         filter_filepicker_files();
         return;
     }
