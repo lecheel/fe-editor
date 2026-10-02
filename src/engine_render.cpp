@@ -110,6 +110,22 @@ void VimEngine::render() {
     unsigned int screen_h, screen_w;
     ncplane_dim_yx(stdplane, &screen_h, &screen_w);
 
+    bool popup_active = show_git_status ||
+                        show_hunk_diff ||
+                        show_theme_popup ||
+                        show_mini_help ||
+                        show_buffer_list ||
+                        show_settings_popup ||
+                        show_rg_popup ||
+                        show_filepicker ||
+                        show_git_hunk_popup ||
+                        show_workspace_list ||
+                        show_whichkey_popup ||
+                        leader_pending ||
+                        ctrl_w_pending ||
+                        leader_p_pending ||
+                        show_cmd_completion;
+
     for (size_t wi = 0; wi < windows.size(); ++wi) {
         render_window(windows[wi], wi == active_win_idx);
     }
@@ -125,7 +141,9 @@ void VimEngine::render() {
     render_info_bar(screen_h - 1, screen_w);
 
     // Enable and position hardware terminal cursor
-    if (mode == Mode::COMMAND || search_active) {
+    if (popup_active) {
+        notcurses_cursor_disable(nc);
+    } else if (mode == Mode::COMMAND || search_active) {
         int avail_w = std::max(1, static_cast<int>(screen_w) - 1);
         int pos = search_active ? search_input_cursor : cmd_cursor_pos;
         int view_start = 0;

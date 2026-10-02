@@ -908,6 +908,25 @@ bool VimEngine::handle_global_shortcuts(const ncinput& ni, uint32_t key) {
         return true;
     }
 
+    bool popup_active = show_git_status ||
+                        show_hunk_diff ||
+                        show_theme_popup ||
+                        show_mini_help ||
+                        show_buffer_list ||
+                        show_settings_popup ||
+                        show_rg_popup ||
+                        show_filepicker ||
+                        show_git_hunk_popup ||
+                        show_workspace_list ||
+                        show_whichkey_popup ||
+                        leader_pending ||
+                        ctrl_w_pending ||
+                        leader_p_pending ||
+                        show_cmd_completion;
+    if (popup_active) {
+        return false;
+    }
+
     if (is_alt(ni, key, 'e')) {
         open_filepicker();
         return true;
@@ -968,6 +987,22 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
             key = static_cast<uint32_t>(Keymap::get_shifted_ascii(static_cast<char>(raw)));
         }
     }
+
+    bool popup_active = show_git_status ||
+                        show_hunk_diff ||
+                        show_theme_popup ||
+                        show_mini_help ||
+                        show_buffer_list ||
+                        show_settings_popup ||
+                        show_rg_popup ||
+                        show_filepicker ||
+                        show_git_hunk_popup ||
+                        show_workspace_list ||
+                        show_whichkey_popup ||
+                        leader_pending ||
+                        ctrl_w_pending ||
+                        leader_p_pending ||
+                        show_cmd_completion;
 
     // 1. Mini help overlay (F12)
     if (is_fkey(ni, key, 12)) {
@@ -1036,14 +1071,16 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    // 4. Hunk navigation shortcuts (F2 / F3)
-    if (is_fkey(ni, key, 2)) {
-        jump_to_prev_hunk();
-        return;
-    }
-    if (is_fkey(ni, key, 3)) {
-        jump_to_next_hunk();
-        return;
+    // 4. Hunk navigation shortcuts (F2 / F3) - only when no popup feature is active
+    if (!popup_active) {
+        if (is_fkey(ni, key, 2)) {
+            jump_to_prev_hunk();
+            return;
+        }
+        if (is_fkey(ni, key, 3)) {
+            jump_to_next_hunk();
+            return;
+        }
     }
 
     // 5. Git Hunk popup (F4)
@@ -1137,7 +1174,7 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
     if (Keymap::is_ctrl_shift(ni, key, 'v')) {
         if (mode == Mode::COMMAND) {
             handle_command_mode(ni, key);
-        } else {
+        } else if (!popup_active) {
             paste_from_clipboard(true);
         }
         return;
@@ -5859,6 +5896,25 @@ std::string VimEngine::get_system_clipboard() {
 }
 
 bool VimEngine::handle_bracketed_paste_fast() {
+    bool popup_active = show_git_status ||
+                        show_hunk_diff ||
+                        show_theme_popup ||
+                        show_mini_help ||
+                        show_buffer_list ||
+                        show_settings_popup ||
+                        show_rg_popup ||
+                        show_filepicker ||
+                        show_git_hunk_popup ||
+                        show_workspace_list ||
+                        show_whichkey_popup ||
+                        leader_pending ||
+                        ctrl_w_pending ||
+                        leader_p_pending ||
+                        show_cmd_completion;
+    if (popup_active) {
+        return false;
+    }
+
     // Check if \033 is followed by [ 2 0 0 ~ in the Notcurses queue.
     // A zero timeout here was racy: when the terminal delivered the paste in
     // chunks, the header check failed and the pasted text was then processed
@@ -5948,6 +6004,22 @@ bool VimEngine::handle_bracketed_paste_fast() {
 
 bool VimEngine::handle_paste_burst(const ncinput& first_ni, uint32_t first_key) {
     if (mode != Mode::INSERT) return false;
+    bool popup_active = show_git_status ||
+                        show_hunk_diff ||
+                        show_theme_popup ||
+                        show_mini_help ||
+                        show_buffer_list ||
+                        show_settings_popup ||
+                        show_rg_popup ||
+                        show_filepicker ||
+                        show_git_hunk_popup ||
+                        show_workspace_list ||
+                        show_whichkey_popup ||
+                        leader_pending ||
+                        ctrl_w_pending ||
+                        leader_p_pending ||
+                        show_cmd_completion;
+    if (popup_active) return false;
 
     // Appends the key's text to `out` and returns true if it is plain text input.
     auto text_of = [](const ncinput& i, uint32_t k, std::string& out) -> bool {
