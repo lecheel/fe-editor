@@ -801,7 +801,7 @@ REGISTER_COMMAND(
             out_lines.push_back("  ]");
             out_lines.push_back("}");
 
-            std::string buf_name = "*exported_actions.json*";
+            std::string buf_name = "exported_actions.json";
             ctx.engine.execute_command("e " + buf_name);
             ctx.engine.active_buf().lines = std::move(out_lines);
             if (ctx.engine.active_buf().syntax) {
@@ -840,7 +840,7 @@ REGISTER_COMMAND(
             doc_lines.push_back(line);
         }
 
-        std::string buf_name = "*actions_reference.md*";
+        std::string buf_name = "actions_reference.md";
         ctx.engine.execute_command("e " + buf_name);
         ctx.engine.active_buf().lines = std::move(doc_lines);
         if (ctx.engine.active_buf().syntax) {
