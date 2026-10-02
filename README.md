@@ -152,7 +152,7 @@ Press `Space` to activate the leader menu. A WhichKey popup appears if you pause
 | `:s/old/new/g` | Substitute on current line |
 | `:%s/old/new/g` | Substitute throughout entire file |
 | `:'<,'>s/old/new/g` | Substitute within visual selection (live match highlighting while typing) |
-| `F11` / `:vg <pat>` | Full-screen interactive ripgrep popup with inline batch replace |
+| `F11` / `:vg <pat>` | Full-screen interactive ripgrep popup with inline batch replace (`/` to reset for another search pattern) |
 
 ---
 
@@ -166,7 +166,7 @@ Press `Space` to activate the leader menu. A WhichKey popup appears if you pause
 | `F5` | **DiffView / Delta** | Full-screen side-by-side diff against `HEAD` or arbitrary files; merge hunks with `a`/`A` and mark custom ranges with `m`/`M`. |
 | `F6` | **Theme Studio** | Live interactive theme picker supporting Helix TOML color schemes. |
 | `F9` | **Settings Panel** | Live editor options: line numbers, gutter width, scroll margins, and search wrap. |
-| `F11` | **Ripgrep Studio** | Grouped repository search with match exclusion (`Space`) and batch replacement (`Tab`). |
+| `F11` | **Ripgrep Studio** | Grouped repository search with match exclusion (`Space`), batch replacement (`Tab`), and reset for another search pattern (`/`). |
 | `F12` | **Quick Help** | Instant on-screen keybinding reference overlay. |
 
 ---

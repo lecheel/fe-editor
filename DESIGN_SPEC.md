@@ -219,7 +219,7 @@ Stored at `~/.config/fe/config.json`:
 | **Global** | `F2` / `F3` | Jump to previous / next Git hunk |
 | **Global** | `F4` | Open Git hunk diff and revert popup |
 | **Global** | `F9` | Open Editor & Gutter Settings popup |
-| **Global** | `F11` | Open / Reopen Ripgrep search popup |
+| **Global** | `F11` | Open / Reopen Ripgrep search popup (`/` to reset for another search pattern) |
 | **Global** | `F12` | Toggle Mini Help bar |
 | **Global** | `Alt-e` | Project File Finder |
 | **Global** | `Alt-s` / `Alt-v` | Horizontal / Vertical window split |

@@ -2031,6 +2031,8 @@ void VimEngine::run_ripgrep(const std::string& pattern) {
     rg_query = pattern;
     rg_groups.clear();
     rg_replace_active = false;
+    rg_query_active = false;
+    rg_query_input.clear();
     rg_replace_query.clear();
 
     std::string root = !project_dir.empty() ? project_dir : ".";
@@ -2273,6 +2275,7 @@ void VimEngine::apply_rg_replace() {
 
     show_rg_popup = false;
     rg_replace_active = false;
+    rg_query_active = false;
     active_win().clamp_all_cursors(active_buf(), mode);
     update_window_scroll(active_win(), active_buf());
     set_info_msg("Replaced " + std::to_string(replaced_count) + " occurrences across " +
@@ -2317,16 +2320,33 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     ncplane_putstr_yx(stdplane, header_sep_y, popup_x + popup_w - 1, "┤");
 
     // Title
-    std::string title = rg_replace_active ? " Ripgrep Replace Mode (TAB: View / Enter: Apply) "
-                                          : " Ripgrep View Mode (:vg / F11 / TAB: Replace) ";
+    std::string title;
+    if (rg_query_active) {
+        title = " Ripgrep Search Mode (Enter: Run / Esc: Cancel) ";
+    } else if (rg_replace_active) {
+        title = " Ripgrep Replace Mode (TAB: View / Enter: Apply) ";
+    } else {
+        title = " Ripgrep View Mode (:vg / F11 / TAB: Replace / /: Search) ";
+    }
     ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 
     // Query & Stats line
     ncplane_set_fg_rgb8(stdplane, 240, 200, 80);
     ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "🔍 Query:   ");
-    ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-    ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, rg_query.c_str());
+    if (rg_query_active) {
+        ncplane_set_fg_rgb8(stdplane, 80, 220, 255);
+        std::string disp = rg_query_input + "_";
+        int max_q_w = popup_w - 36;
+        if (static_cast<int>(disp.size()) > max_q_w && max_q_w > 0) {
+            disp = disp.substr(disp.size() - max_q_w);
+        }
+        ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, disp.c_str());
+        notcurses_cursor_enable(nc, popup_y + 1, popup_x + 14 + static_cast<int>(rg_query_input.size()));
+    } else {
+        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
+        ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, rg_query.c_str());
+    }
 
     int non_ignored_cnt = 0;
     for (const auto& m : rg_flattened_matches) {
@@ -2334,7 +2354,9 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     }
 
     char stats_buf[128];
-    if (rg_replace_active) {
+    if (rg_query_active) {
+        snprintf(stats_buf, sizeof(stats_buf), "[Type pattern | Enter: search | Esc: cancel]");
+    } else if (rg_replace_active) {
         snprintf(stats_buf, sizeof(stats_buf), "[%d/%zu to replace | %zu files]",
                  non_ignored_cnt, rg_flattened_matches.size(), rg_groups.size());
     } else {
@@ -2344,7 +2366,8 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
                  rg_flattened_matches.size());
     }
     int stats_x = popup_x + popup_w - static_cast<int>(std::string(stats_buf).size()) - 3;
-    if (stats_x > popup_x + 16 + static_cast<int>(rg_query.size())) {
+    int query_disp_len = rg_query_active ? static_cast<int>(rg_query_input.size()) : static_cast<int>(rg_query.size());
+    if (stats_x > popup_x + 16 + query_disp_len) {
         ncplane_set_fg_rgb8(stdplane, 140, 150, 175);
         ncplane_putstr_yx(stdplane, popup_y + 1, stats_x, stats_buf);
     }
@@ -2367,6 +2390,13 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     rg_scroll = std::max(0, rg_scroll);
 
     int max_x = popup_x + popup_w - 2;
+
+    if (rg_display_lines.empty()) {
+        std::string empty_msg = rg_query_active ? "Type a search pattern and press Enter"
+                                                : "No matches found. Press '/' to search for another pattern.";
+        ncplane_set_fg_rgb8(stdplane, 140, 150, 175);
+        ncplane_putstr_yx(stdplane, list_start_y + 1, popup_x + 4, empty_msg.c_str());
+    }
 
     // Render grouped rows
     for (int r = 0; r < visible_rows; ++r) {
@@ -2536,8 +2566,11 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     if (rg_replace_active) {
         footer = " [▲/▼] Navigate  [Space] Toggle Ignore  [Enter] Apply  [TAB] View Mode  [Esc] Cancel ";
         ncplane_set_fg_rgb8(stdplane, 80, 230, 140);
+    } else if (rg_query_active) {
+        footer = " [Enter] Run Search  [Ctrl-U] Clear  [Ctrl-Shift-V] Paste  [Esc] Cancel ";
+        ncplane_set_fg_rgb8(stdplane, 80, 230, 140);
     } else {
-        footer = " [j/k/▲/▼] Match  [TAB] Replace Mode  [{/}] File Group  [Enter] Open  [Esc/q] Close ";
+        footer = " [/] New Search  [TAB] Replace Mode  [{/}] File Group  [Enter] Open  [Esc/q] Close ";
         ncplane_set_fg_rgb8(stdplane, 255, 215, 80);
     }
     ncplane_set_bg_rgb8(stdplane, 18, 20, 26);

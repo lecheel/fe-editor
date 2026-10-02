@@ -1205,6 +1205,7 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
     if (is_fkey(ni, key, 11)) {
         if (show_rg_popup) {
             show_rg_popup = false;
+            rg_query_active = false;
         } else {
             show_filepicker = false;
             show_settings_popup = false;
@@ -1212,13 +1213,17 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
             show_whichkey_popup = false;
             if (!rg_groups.empty()) {
                 show_rg_popup = true;
+                rg_query_active = false;
                 set_info_msg("Ripgrep: \"" + rg_query + "\" (" + std::to_string(rg_flattened_matches.size()) + " matches)");
             } else {
                 std::string c_word = get_word_under_cursor();
                 if (!c_word.empty()) {
                     run_ripgrep(c_word);
                 } else {
-                    set_info_msg("No previous search results. Usage: :vg <pattern>");
+                    show_rg_popup = true;
+                    rg_query_active = true;
+                    rg_query_input.clear();
+                    set_info_msg("Ripgrep: Enter search pattern...");
                 }
             }
         }
@@ -2135,6 +2140,88 @@ void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
 }
 
 void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
+    if (rg_query_active) {
+        if (is_esc(ni, key) || is_fkey(ni, key, 11)) {
+            rg_query_active = false;
+            rg_query_input.clear();
+            if (rg_groups.empty() && rg_query.empty()) {
+                show_rg_popup = false;
+            }
+            set_info_msg(rg_groups.empty() ? "" : "Search cancelled.");
+            return;
+        }
+
+        if (is_enter(ni, key)) {
+            if (!rg_query_input.empty()) {
+                std::string q = rg_query_input;
+                rg_query_active = false;
+                rg_query_input.clear();
+                run_ripgrep(q);
+            } else if (!rg_query.empty()) {
+                rg_query_active = false;
+                run_ripgrep(rg_query);
+            } else {
+                set_info_msg("Please enter a search pattern.");
+            }
+            return;
+        }
+
+        if (is_backspace(ni, key)) {
+            if (!rg_query_input.empty()) {
+                rg_query_input.pop_back();
+            }
+            return;
+        }
+
+        if (is_ctrl(ni, key, 'u')) {
+            rg_query_input.clear();
+            return;
+        }
+
+        if (is_ctrl(ni, key, 'w')) {
+            while (!rg_query_input.empty() && std::isspace(static_cast<unsigned char>(rg_query_input.back()))) {
+                rg_query_input.pop_back();
+            }
+            while (!rg_query_input.empty() && !std::isspace(static_cast<unsigned char>(rg_query_input.back()))) {
+                rg_query_input.pop_back();
+            }
+            return;
+        }
+
+        if (Keymap::is_ctrl_shift(ni, key, 'v')) {
+            std::string clip = get_system_clipboard();
+            for (char c : clip) {
+                if (c == '\r' || c == '\n') break;
+                rg_query_input += c;
+            }
+            return;
+        }
+
+        if (key == ' ') {
+            rg_query_input += ' ';
+            return;
+        }
+
+        if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
+            rg_query_input += static_cast<char>(key);
+            return;
+        }
+
+        if (ni.utf8[0] != '\0' && !ni.alt && !ni.ctrl) {
+            rg_query_input += reinterpret_cast<const char*>(ni.utf8);
+            return;
+        }
+
+        return;
+    }
+
+    if (key == '/' && !rg_replace_active) {
+        rg_query_active = true;
+        rg_query_input.clear();
+        set_info_msg("Ripgrep: Enter search pattern...");
+        return;
+    }
+
     if (is_esc(ni, key) || is_fkey(ni, key, 11) || ((key == 'q' || key == 'Q') && !rg_replace_active)) {
         if (rg_replace_active) {
             rg_replace_active = false;
@@ -2142,6 +2229,7 @@ void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
         }
         show_rg_popup = false;
         rg_replace_active = false;
+        rg_query_active = false;
         set_info_msg("");
         return;
     }
@@ -5360,7 +5448,10 @@ void VimEngine::execute_command(const std::string& cmd_str) {
             if (!c_word.empty()) {
                 self.run_ripgrep(c_word);
             } else {
-                self.set_info_msg("No previous search results. Usage: :vg <pattern>");
+                self.show_rg_popup = true;
+                self.rg_query_active = true;
+                self.rg_query_input.clear();
+                self.set_info_msg("Ripgrep: Enter search pattern...");
             }
         });
 

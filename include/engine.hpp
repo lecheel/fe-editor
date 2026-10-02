@@ -226,6 +226,8 @@ private:
 
     bool show_rg_popup{false};
     bool rg_replace_active{false};
+    bool rg_query_active{false};
+    std::string rg_query_input;
     std::string rg_replace_query;
     std::string rg_query;
     std::vector<RgGroup> rg_groups;
