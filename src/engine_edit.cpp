@@ -86,6 +86,91 @@ std::vector<KeymapJsonToken> tokenize_keymap_json(const std::string& text) {
     return tokens;
 }
 
+// Vim-style '%' matcher. If (y, x) is on a bracket, its partner is returned.
+// Otherwise the first bracket at or after x on the same line is used.
+// Brackets inside strings and comments are not skipped.
+bool find_matching_bracket(const std::vector<std::string>& lines, int y, int x,
+                           int& out_y, int& out_x) {
+    if (y < 0 || y >= static_cast<int>(lines.size())) return false;
+    static const std::string opens = "([{";
+    static const std::string closes = ")]}";
+
+    const std::string& line = lines[y];
+    int pos = -1;
+    for (int i = std::max(0, x); i < static_cast<int>(line.size()); ++i) {
+        if (opens.find(line[i]) != std::string::npos ||
+            closes.find(line[i]) != std::string::npos) {
+            pos = i;
+            break;
+        }
+    }
+    if (pos < 0) return false;
+
+    char c = line[pos];
+    bool forward = opens.find(c) != std::string::npos;
+    size_t k = forward ? opens.find(c) : closes.find(c);
+    const char open_c = opens[k];
+    const char close_c = closes[k];
+    int depth = 0;
+
+    if (forward) {
+        for (int cy = y; cy < static_cast<int>(lines.size()); ++cy) {
+            const std::string& l = lines[cy];
+            for (int cx = (cy == y ? pos : 0); cx < static_cast<int>(l.size()); ++cx) {
+                if (l[cx] == open_c) {
+                    depth++;
+                } else if (l[cx] == close_c) {
+                    if (--depth == 0) {
+                        out_y = cy;
+                        out_x = cx;
+                        return true;
+                    }
+                }
+            }
+        }
+    } else {
+        for (int cy = y; cy >= 0; --cy) {
+            const std::string& l = lines[cy];
+            for (int cx = (cy == y ? pos : static_cast<int>(l.size()) - 1); cx >= 0; --cx) {
+                if (l[cx] == close_c) {
+                    depth++;
+                } else if (l[cx] == open_c) {
+                    if (--depth == 0) {
+                        out_y = cy;
+                        out_x = cx;
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Moves every cursor to its matching bracket. Shared by the '%' key in
+// normal/visual mode and the "match_bracket" keymap action.
+bool jump_matching_bracket(VimEngine& engine, Mode mode) {
+    auto& win = engine.active_win();
+    auto& buf = engine.active_buf();
+    bool moved = false;
+    for (auto& c : win.cursors) {
+        int ny = 0, nx = 0;
+        if (find_matching_bracket(buf.lines, c.y, c.x, ny, nx)) {
+            c.y = ny;
+            c.x = nx;
+            moved = true;
+        }
+    }
+    if (!moved) {
+        engine.set_info_msg("No matching bracket");
+        return false;
+    }
+    win.clamp_all_cursors(buf, mode);
+    win.deduplicate_cursors();
+    engine.update_window_scroll(win, buf);
+    return true;
+}
+
 } // namespace
 
 void KeymapConfig::load(const std::string& config_dir) {
@@ -469,6 +554,13 @@ void ActionRegistry::init_default_actions() {
             for (auto& c : ctx.engine.active_win().cursors) {
                 c.x = ctx.engine.active_win().get_max_x(ctx.engine.active_buf(), c.y, ctx.mode);
             }
+            return true;
+        }
+    );
+
+    register_action("match_bracket", {"%", "bracket_match", "matchpair"}, "Navigation", "Jump to matching bracket (%)",
+        [](ActionContext& ctx) {
+            jump_matching_bracket(ctx.engine, ctx.mode);
             return true;
         }
     );
@@ -3734,6 +3826,9 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
                 execute_dot_command(*this, s_last_dot_cmd, true);
             }
             break;
+        case '%':
+            jump_matching_bracket(*this, mode);
+            break;
         case 'C': {
             Cursor primary = win.cursors.back();
             if (primary.y + 1 < static_cast<int>(buf.lines.size())) {
@@ -4019,6 +4114,9 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
             update_window_scroll(win, buf);
             break;
         }
+        case '%':
+            jump_matching_bracket(*this, mode);
+            break;
         case 'I': {
             if (mode == Mode::VISUAL_BLOCK) {
                 buf.push_undo(win.cursors);
