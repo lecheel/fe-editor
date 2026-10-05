@@ -417,15 +417,15 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
 
     std::vector<Slot> row1 = {
         {"F1", "Git View"},
-        {"F2", "Prev Hunk"},
-        {"F3", "Next Hunk"},
+        {"F2", "Comment"},
+        {"F3", "--"},
         {"F4", "Hunk Popup"},
         {"F5", "Hunk Diff"},
         {"F6", "Theme"}
     };
 
     std::vector<Slot> row2 = {
-        {"F7", "Comment"},
+        {"F7", "--"},
         {"F8", "--"},
         {"F9", "Settings"},
         {"F10", "--"},

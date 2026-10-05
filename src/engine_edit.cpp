@@ -689,7 +689,7 @@ void ActionRegistry::init_default_actions() {
     );
 
     register_action("comment_toggle", {"comment", "toggle_comment", "gc"}, "Edit",
-        "Toggle line comments on current line or selection (F7)",
+        "Toggle line comments on current line or selection (F2)",
         [](ActionContext& ctx) {
             ctx.engine.toggle_line_comments();
             return true;
@@ -1283,22 +1283,10 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    // 3c. Comment toggle (F7)
-    if (!popup_active && is_fkey(ni, key, 7)) {
+    // 3c. Comment toggle (F2)
+    if (!popup_active && is_fkey(ni, key, 2)) {
         toggle_line_comments();
         return;
-    }
-
-    // 4. Hunk navigation shortcuts (F2 / F3) - only when no popup feature is active
-    if (!popup_active) {
-        if (is_fkey(ni, key, 2)) {
-            jump_to_prev_hunk();
-            return;
-        }
-        if (is_fkey(ni, key, 3)) {
-            jump_to_next_hunk();
-            return;
-        }
     }
 
     // 5. Git Hunk popup (F4)
