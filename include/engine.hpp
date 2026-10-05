@@ -353,6 +353,7 @@ public:
     void layout_windows();
 
     void handle_key_input(const ncinput& ni, uint32_t key);
+    void toggle_line_comments();
     bool handle_global_shortcuts(const ncinput& ni, uint32_t key);
     bool handle_navigation(const ncinput& ni, uint32_t key);
     void copy_to_system_clipboard(const std::string& text);

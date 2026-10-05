@@ -425,7 +425,7 @@ void VimEngine::render_mini_help(unsigned int screen_h, unsigned int screen_w) {
     };
 
     std::vector<Slot> row2 = {
-        {"F7", "--"},
+        {"F7", "Comment"},
         {"F8", "--"},
         {"F9", "Settings"},
         {"F10", "--"},

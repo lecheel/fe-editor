@@ -687,6 +687,14 @@ void ActionRegistry::init_default_actions() {
             return true;
         }
     );
+
+    register_action("comment_toggle", {"comment", "toggle_comment", "gc"}, "Edit",
+        "Toggle line comments on current line or selection (F7)",
+        [](ActionContext& ctx) {
+            ctx.engine.toggle_line_comments();
+            return true;
+        }
+    );
 }
 
 bool KeymapConfig::execute_action(VimEngine& engine, Mode mode, const std::string& action) {
@@ -996,6 +1004,121 @@ inline IndentInfo get_indent_info_for_lang(const std::string& lang) {
     return info;
 }
 
+inline std::string get_line_comment_prefix(const std::string& lang) {
+    if (lang == "rust" || lang == "go" || lang == "json" ||
+        lang == "javascript" || lang == "typescript" ||
+        lang == "cpp" || lang == "c" || lang == "c++" ||
+        lang == "java" || lang == "kotlin" || lang == "swift" ||
+        lang == "dart" || lang == "php" || lang == "scala") {
+        return "//";
+    }
+    if (lang == "bash" || lang == "sh" || lang == "shell" ||
+        lang == "python" || lang == "toml" ||
+        lang == "yaml" || lang == "yml" || lang == "ruby" ||
+        lang == "perl" || lang == "r" || lang == "makefile" ||
+        lang == "dockerfile" || lang == "cmake" || lang == "nix") {
+        return "#";
+    }
+    return "";
+}
+
+void VimEngine::toggle_line_comments() {
+    auto& win = active_win();
+    auto& buf = active_buf();
+
+    std::string lang = buf.syntax ? buf.syntax->get_language() : "";
+    if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
+
+    std::string prefix = get_line_comment_prefix(lang);
+    if (prefix.empty()) {
+        set_info_msg("Comment toggle: unsupported language '" + lang + "'");
+        return;
+    }
+
+    std::set<int> target_lines;
+    if (mode == Mode::VISUAL || mode == Mode::VISUAL_BLOCK) {
+        Cursor primary = win.cursors.front();
+        int min_y = std::min(win.visual_anchor.y, primary.y);
+        int max_y = std::max(win.visual_anchor.y, primary.y);
+        for (int y = min_y; y <= max_y; ++y) target_lines.insert(y);
+    } else {
+        for (const auto& c : win.cursors) {
+            if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size()))
+                target_lines.insert(c.y);
+        }
+    }
+    if (target_lines.empty()) return;
+
+    buf.push_undo(win.cursors);
+
+    bool all_commented = true;
+    for (int y : target_lines) {
+        if (y < 0 || y >= static_cast<int>(buf.lines.size())) continue;
+        const std::string& line = buf.lines[y];
+        bool only_ws = true;
+        for (char c : line) {
+            if (!std::isspace(static_cast<unsigned char>(c))) { only_ws = false; break; }
+        }
+        if (only_ws) continue;
+        size_t p = 0;
+        while (p < line.size() && std::isspace(static_cast<unsigned char>(line[p]))) p++;
+        if (line.compare(p, prefix.size(), prefix) != 0) {
+            all_commented = false;
+            break;
+        }
+    }
+
+    int toggled_count = 0;
+    for (int y : target_lines) {
+        if (y < 0 || y >= static_cast<int>(buf.lines.size())) continue;
+        std::string& line = buf.lines[y];
+        bool only_ws = true;
+        for (char c : line) {
+            if (!std::isspace(static_cast<unsigned char>(c))) { only_ws = false; break; }
+        }
+        if (only_ws) continue;
+        toggled_count++;
+
+        size_t p = 0;
+        while (p < line.size() && std::isspace(static_cast<unsigned char>(line[p]))) p++;
+
+        if (all_commented) {
+            if (line.compare(p, prefix.size(), prefix) == 0) {
+                size_t remove_end = p + prefix.size();
+                if (remove_end < line.size() && line[remove_end] == ' ') remove_end++;
+                int removed = static_cast<int>(remove_end - p);
+                line.erase(p, removed);
+                for (auto& c : win.cursors) {
+                    if (c.y == y && c.x > static_cast<int>(p))
+                        c.x = std::max(static_cast<int>(p), c.x - removed);
+                }
+            }
+        } else {
+            line.insert(p, prefix + " ");
+            int added = static_cast<int>(prefix.size() + 1);
+            for (auto& c : win.cursors) {
+                if (c.y == y && c.x > static_cast<int>(p))
+                    c.x += added;
+            }
+        }
+    }
+
+    buf.modified = true;
+    buf.version++;
+    buf.invalidate_hunks();
+    if (buf.syntax) buf.syntax->update_text(buf.lines);
+    win.clamp_all_cursors(buf, mode);
+    update_window_scroll(win, buf);
+
+    if (mode == Mode::VISUAL || mode == Mode::VISUAL_BLOCK) {
+        mode = Mode::NORMAL;
+        win.clamp_all_cursors(buf, mode);
+    }
+
+    set_info_msg(std::string(all_commented ? "Uncommented " : "Commented ") +
+                 std::to_string(toggled_count) + " line(s)");
+}
+
 bool VimEngine::handle_global_shortcuts(const ncinput& ni, uint32_t key) {
     if (is_alt(ni, key, 'q')) {
         running = false;
@@ -1157,6 +1280,12 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
     }
     if (show_theme_popup) {
         handle_theme_popup_input(ni, key);
+        return;
+    }
+
+    // 3c. Comment toggle (F7)
+    if (!popup_active && is_fkey(ni, key, 7)) {
+        toggle_line_comments();
         return;
     }
 
@@ -2849,6 +2978,15 @@ REGISTER_COMMAND(
         win.clamp_all_cursors(buf, Mode::NORMAL);
         ctx.engine.update_window_scroll(win, buf);
         ctx.engine.set_info_msg("Reindented entire file (" + std::to_string(buf.lines.size()) + " lines)");
+    }
+);
+
+REGISTER_COMMAND(
+    togglecomment,
+    (std::vector<std::string>{"comment", "togglecomment", "gc"}),
+    "Toggle line comments on current line or selection (:comment)",
+    [](CommandContext& ctx) {
+        ctx.engine.toggle_line_comments();
     }
 );
 
@@ -5282,14 +5420,35 @@ void VimEngine::execute_command(const std::string& cmd_str) {
         return;
     }
 
-    if (CommandRegistry::instance().execute(*this, cmd_str)) {
-        return;
-    }
+            if (CommandRegistry::instance().execute(*this, cmd_str)) {
+                return;
+            }
 
-    // Built-in ex commands: one handler per command, looked up by name/alias.
-    // Lambdas are defined inside a member function, so they keep access to
-    // VimEngine's private members through `self`.
-    static const std::unordered_map<std::string, ExCommandFn> ex_table = [] {
+            // Goto line: if command is purely numeric, jump to that line number
+            bool is_goto_line = !cmd.empty() && std::all_of(cmd.begin(), cmd.end(),
+                [](unsigned char c) { return std::isdigit(c); });
+            if (is_goto_line) {
+                try {
+                    int line_num = std::stoi(cmd);
+                    if (line_num > 0) {
+                        auto& win = active_win();
+                        auto& buf = active_buf();
+                        int target_y = std::clamp(line_num - 1, 0, std::max(0, static_cast<int>(buf.lines.size()) - 1));
+                        for (auto& c : win.cursors) {
+                            c.y = target_y;
+                            c.x = 0;
+                        }
+                        win.clamp_all_cursors(buf, mode);
+                        update_window_scroll(win, buf);
+                    }
+                } catch (...) {}
+                return;
+            }
+
+            // Built-in ex commands: one handler per command, looked up by name/alias.
+            // Lambdas are defined inside a member function, so they keep access to
+            // VimEngine's private members through `self`.
+            static const std::unordered_map<std::string, ExCommandFn> ex_table = [] {
         std::unordered_map<std::string, ExCommandFn> t;
         auto reg = [&t](std::initializer_list<const char*> names, ExCommandFn fn) {
             for (const char* n : names) t[n] = fn;
