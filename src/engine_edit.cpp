@@ -3957,6 +3957,30 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
                 win.clamp_all_cursors(buf, mode);
                 update_window_scroll(win, buf);
                 set_info_msg("Pasted " + std::to_string(yank_reg.lines.size()) + " line(s) below (p)");
+            } else if (yank_reg.lines.size() > 1) {
+                Cursor primary = win.cursors.front();
+                if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+                    std::string& line = buf.lines[primary.y];
+                    int ins_x = std::min(primary.x + (line.empty() ? 0 : 1), static_cast<int>(line.size()));
+                    std::string before = line.substr(0, ins_x);
+                    std::string after = line.substr(ins_x);
+
+                    buf.lines[primary.y] = before + yank_reg.lines.front();
+                    int insert_y = primary.y + 1;
+                    for (size_t i = 1; i + 1 < yank_reg.lines.size(); ++i) {
+                        buf.lines.insert(buf.lines.begin() + insert_y, yank_reg.lines[i]);
+                        insert_y++;
+                    }
+                    buf.lines.insert(buf.lines.begin() + insert_y, yank_reg.lines.back() + after);
+                    win.cursors = {{insert_y, static_cast<int>(yank_reg.lines.back().size())}};
+                }
+                buf.modified = true;
+                buf.version++;
+                buf.invalidate_hunks();
+                if (buf.syntax) buf.syntax->update_text(buf.lines);
+                win.clamp_all_cursors(buf, mode);
+                update_window_scroll(win, buf);
+                set_info_msg("Pasted text (p)");
             } else {
                 for (auto& c : win.cursors) {
                     if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
@@ -3998,6 +4022,30 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
                 win.clamp_all_cursors(buf, mode);
                 update_window_scroll(win, buf);
                 set_info_msg("Pasted " + std::to_string(yank_reg.lines.size()) + " line(s) above (P)");
+            } else if (yank_reg.lines.size() > 1) {
+                Cursor primary = win.cursors.front();
+                if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
+                    std::string& line = buf.lines[primary.y];
+                    int ins_x = std::clamp(primary.x, 0, static_cast<int>(line.size()));
+                    std::string before = line.substr(0, ins_x);
+                    std::string after = line.substr(ins_x);
+
+                    buf.lines[primary.y] = before + yank_reg.lines.front();
+                    int insert_y = primary.y + 1;
+                    for (size_t i = 1; i + 1 < yank_reg.lines.size(); ++i) {
+                        buf.lines.insert(buf.lines.begin() + insert_y, yank_reg.lines[i]);
+                        insert_y++;
+                    }
+                    buf.lines.insert(buf.lines.begin() + insert_y, yank_reg.lines.back() + after);
+                    win.cursors = {{primary.y, ins_x}};
+                }
+                buf.modified = true;
+                buf.version++;
+                buf.invalidate_hunks();
+                if (buf.syntax) buf.syntax->update_text(buf.lines);
+                win.clamp_all_cursors(buf, mode);
+                update_window_scroll(win, buf);
+                set_info_msg("Pasted text (P)");
             } else {
                 for (auto& c : win.cursors) {
                     if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
