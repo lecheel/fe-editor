@@ -617,25 +617,47 @@ void ActionRegistry::init_default_actions() {
         }
     );
 
-    register_action("delete_char", {"x", "del"}, "Edit", "Delete character under cursor (x/Del)",
+    register_action("delete_char", {"x", "del"}, "Edit",
+        "Delete char under cursor (x/Del); in insert mode at EOL, join next line",
         [](ActionContext& ctx) {
             auto& win = ctx.engine.active_win();
             auto& buf = ctx.engine.active_buf();
             buf.push_undo(win.cursors);
-            std::sort(win.cursors.begin(), win.cursors.end());
+
+            // Top-to-bottom, left-to-right: when we join line y with line y+1
+            // the removal of index y+1 only affects cursors that come later in
+            // the list, which we have not touched yet.
+            std::sort(win.cursors.begin(), win.cursors.end(),
+                      [](const Cursor& a, const Cursor& b) {
+                          if (a.y != b.y) return a.y < b.y;
+                          return a.x < b.x;
+                      });
+
             std::string deleted_text;
             bool any_deleted = false;
-            for (auto& c : win.cursors) {
-                if (c.y >= 0 && c.y < static_cast<int>(buf.lines.size())) {
-                    std::string& line = buf.lines[c.y];
-                    if (!line.empty() && c.x < static_cast<int>(line.size())) {
-                        deleted_text += line[c.x];
-                        line.erase(c.x, 1);
-                        any_deleted = true;
+            bool any_joined = false;
+            for (size_t i = 0; i < win.cursors.size(); ++i) {
+                Cursor& c = win.cursors[i];
+                if (c.y < 0 || c.y >= static_cast<int>(buf.lines.size())) continue;
+                std::string& line = buf.lines[c.y];
+                if (c.x < static_cast<int>(line.size())) {
+                    // Cursor is over a real character: forward-delete it.
+                    deleted_text += line[c.x];
+                    line.erase(c.x, 1);
+                    any_deleted = true;
+                } else if (ctx.mode == Mode::INSERT && c.y + 1 < static_cast<int>(buf.lines.size())) {
+                    // Insert-mode Del at end-of-line: join with the next line.
+                    // (Normal-mode x deliberately does NOT join, to match Vim.)
+                    line += buf.lines[c.y + 1];
+                    buf.lines.erase(buf.lines.begin() + c.y + 1);
+                    for (size_t j = i + 1; j < win.cursors.size(); ++j) {
+                        if (win.cursors[j].y > c.y) win.cursors[j].y -= 1;
                     }
+                    any_joined = true;
                 }
             }
-            if (any_deleted) {
+
+            if (any_deleted || any_joined) {
                 ctx.engine.yank_reg.is_linewise = false;
                 ctx.engine.yank_reg.text = deleted_text;
                 ctx.engine.yank_reg.lines = {deleted_text};
@@ -644,10 +666,11 @@ void ActionRegistry::init_default_actions() {
                 buf.invalidate_hunks();
                 if (buf.syntax) buf.syntax->update_text(buf.lines);
             }
+            std::sort(win.cursors.begin(), win.cursors.end());
             win.clamp_all_cursors(buf, ctx.mode);
             win.deduplicate_cursors();
             ctx.engine.update_window_scroll(win, buf);
-            ctx.engine.set_info_msg("Deleted char (x)");
+            ctx.engine.set_info_msg(any_joined ? "Deleted to next line (Del)" : "Deleted char (x)");
             return true;
         }
     );
@@ -5991,14 +6014,61 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         return;
     }
 
-    if (key == NCKEY_BACKSPACE || key == 127 || key == '\b') {
+    // --- Delete key (Del / 0x1b[3~) ---
+    // Must be checked BEFORE Backspace: on several terminals/notcurses setups
+    // the Delete key arrives as the raw DEL byte 0x7f, which would otherwise
+    // be swallowed by the Backspace branch below and just delete the previous
+    // character instead of joining the next line at end-of-line.
+    if (key == NCKEY_DEL || ni.id == NCKEY_DEL) {
+        // Top-to-bottom: joining line y with y+1 removes index y+1, which is
+        // what later cursors would have been sitting on.
+        std::sort(win.cursors.begin(), win.cursors.end(),
+                  [](const Cursor& a, const Cursor& b) {
+                      if (a.y != b.y) return a.y < b.y;
+                      return a.x < b.x;
+                  });
+
+        for (size_t i = 0; i < win.cursors.size(); ++i) {
+            Cursor& c = win.cursors[i];
+            if (c.y < 0 || c.y >= static_cast<int>(buf.lines.size())) continue;
+            std::string& line = buf.lines[c.y];
+            if (c.x < static_cast<int>(line.size())) {
+                int next_p = Keymap::utf8_next_char(line, c.x);
+                if (next_p <= c.x) next_p = c.x + 1;
+                if (next_p > static_cast<int>(line.size())) next_p = static_cast<int>(line.size());
+                line.erase(c.x, next_p - c.x);
+            } else if (c.y + 1 < static_cast<int>(buf.lines.size())) {
+                // Cursor sits past the last character of the line (or the line
+                // is empty): join it with the line below.
+                line += buf.lines[c.y + 1];
+                buf.lines.erase(buf.lines.begin() + c.y + 1);
+                for (size_t j = i + 1; j < win.cursors.size(); ++j) {
+                    if (win.cursors[j].y > c.y) win.cursors[j].y -= 1;
+                }
+            }
+        }
+        std::sort(win.cursors.begin(), win.cursors.end());
+        buf.modified = true;
+        buf.version++;
+        buf.invalidate_hunks();
+        if (buf.syntax) buf.syntax->update_text(buf.lines);
+        win.deduplicate_cursors();
+        update_autocomplete_after_edit();
+        return;
+    }
+
+    // --- Backspace key (BS / 0x08 / raw DEL 0x7f) ---
+    // Note: 0x7f is ambiguous. We keep it here so a terminal that sends 0x7f
+    // for Backspace still behaves as Backspace. If your Delete key also emits
+    // 0x7f, remap it in the terminal to emit \x1b[3~ (which notcurses decodes
+    // to NCKEY_DEL above).
+    if (key == NCKEY_BACKSPACE || key == 127 || key == '\b' || ni.id == NCKEY_BACKSPACE) {
         std::string lang = buf.syntax ? buf.syntax->get_language() : "";
         if (lang.empty()) lang = detect_lang(!buf.file_path.empty() ? buf.file_path : buf.name);
         IndentInfo info = get_indent_info_for_lang(lang);
 
-        // Process bottom-to-top so that joining a line with its predecessor
-        // (which removes the joined line) does not disturb the line indices of
-        // cursors we have not yet handled.
+        // Bottom-to-top so that joining line y-1 with y (which removes y) does
+        // not perturb the y of cursors we have not yet handled.
         std::sort(win.cursors.begin(), win.cursors.end(),
                   [](const Cursor& a, const Cursor& b) {
                       if (a.y != b.y) return a.y > b.y;
@@ -6041,42 +6111,6 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
             }
         }
         std::sort(win.cursors.begin(), win.cursors.end());
-        buf.modified = true;
-        buf.version++;
-        buf.invalidate_hunks();
-        if (buf.syntax) buf.syntax->update_text(buf.lines);
-        win.deduplicate_cursors();
-        update_autocomplete_after_edit();
-        return;
-    }
-
-    if (key == NCKEY_DEL) {
-        // Process top-to-bottom so that joining a line with its successor
-        // (which removes the successor) is reflected in the y of cursors we
-        // have not yet handled.
-        std::sort(win.cursors.begin(), win.cursors.end(),
-                  [](const Cursor& a, const Cursor& b) {
-                      if (a.y != b.y) return a.y < b.y;
-                      return a.x < b.x;
-                  });
-
-        for (size_t i = 0; i < win.cursors.size(); ++i) {
-            Cursor& c = win.cursors[i];
-            if (c.y < 0 || c.y >= static_cast<int>(buf.lines.size())) continue;
-            std::string& line = buf.lines[c.y];
-            if (c.x < static_cast<int>(line.size())) {
-                int next_p = Keymap::utf8_next_char(line, c.x);
-                if (next_p <= c.x) next_p = c.x + 1;
-                line.erase(c.x, next_p - c.x);
-            } else if (c.y + 1 < static_cast<int>(buf.lines.size())) {
-                // Delete at end of line: join with the next line.
-                line += buf.lines[c.y + 1];
-                buf.lines.erase(buf.lines.begin() + c.y + 1);
-                for (size_t j = i + 1; j < win.cursors.size(); ++j) {
-                    if (win.cursors[j].y > c.y) win.cursors[j].y -= 1;
-                }
-            }
-        }
         buf.modified = true;
         buf.version++;
         buf.invalidate_hunks();
