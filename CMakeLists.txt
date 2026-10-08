@@ -30,6 +30,8 @@ add_executable(fe
     src/util/bracket_match.cpp
     src/util/keymap_json.cpp
     src/dot_command.cpp
+    src/bracket_jump.cpp
+    src/keymap_config.cpp
 )
 
 if(WIN32)
