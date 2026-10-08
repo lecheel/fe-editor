@@ -41,6 +41,7 @@ add_executable(fe
     src/clipboard_members.cpp
     src/theme_manager.cpp
     src/workspace_manager.cpp
+    src/insert_mode.cpp
 )
 
 if(WIN32)
