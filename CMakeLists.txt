@@ -38,6 +38,7 @@ add_executable(fe
     src/cmd_substitute.cpp
     src/execute_command.cpp
     src/edit_ops.cpp
+    src/clipboard_members.cpp
 )
 
 if(WIN32)
