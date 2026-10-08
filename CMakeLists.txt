@@ -42,6 +42,7 @@ add_executable(fe
     src/theme_manager.cpp
     src/workspace_manager.cpp
     src/insert_mode.cpp
+    src/command_mode.cpp
 )
 
 if(WIN32)
