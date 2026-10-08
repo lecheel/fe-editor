@@ -43,6 +43,7 @@ add_executable(fe
     src/workspace_manager.cpp
     src/insert_mode.cpp
     src/command_mode.cpp
+    src/hunk_diff_input.cpp
 )
 
 if(WIN32)
