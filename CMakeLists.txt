@@ -44,6 +44,7 @@ add_executable(fe
     src/insert_mode.cpp
     src/command_mode.cpp
     src/hunk_diff_input.cpp
+    src/normal_visual_mode.cpp
 )
 
 if(WIN32)
