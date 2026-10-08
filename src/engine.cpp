@@ -177,6 +177,7 @@ VimEngine::VimEngine(bool verbose, const std::vector<std::string>& files) {
             "//   h / j / k       Move left, down, up (also Arrows, Home, End, PgUp, PgDown)",
             "//   l / L           Jump to next / previous git hunk (like F3 / F2)",
             "//   0 / $           Jump to line start / end",
+            "//   * / #           Search word under cursor forward / backward (n / N)",
             "//   gg / G          Jump to top / end of file",
             "//   yy / p / P      Yank line, paste after / paste before cursor",
             "//   dd / dw / d^ / d$ Delete line, word, to line start, to line end",

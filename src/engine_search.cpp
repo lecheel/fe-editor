@@ -1492,6 +1492,28 @@ void VimEngine::clear_search_highlights() {
     set_info_msg("");
 }
 
+void VimEngine::search_word_under_cursor() {
+    std::string word = get_word_under_cursor();
+    if (word.empty()) {
+        set_info_msg("No word under cursor");
+        return;
+    }
+    search_query = word;
+    search_highlight_on = true;
+    search_jump_next();
+}
+
+void VimEngine::search_word_under_cursor_prev() {
+    std::string word = get_word_under_cursor();
+    if (word.empty()) {
+        set_info_msg("No word under cursor");
+        return;
+    }
+    search_query = word;
+    search_highlight_on = true;
+    search_jump_prev();
+}
+
 void VimEngine::open_filepicker() {
     show_whichkey_popup = false;
     show_git_hunk_popup = false;
@@ -1877,10 +1899,14 @@ std::string VimEngine::get_word_under_cursor() {
     };
 
     if (!is_word_char(line[cx])) {
-        // Try nearby word char
-        if (cx > 0 && is_word_char(line[cx - 1])) cx--;
-        else if (cx + 1 < static_cast<int>(line.size()) && is_word_char(line[cx + 1])) cx++;
-        else return "";
+        if (cx > 0 && is_word_char(line[cx - 1])) {
+            cx--;
+        } else {
+            while (cx < static_cast<int>(line.size()) && !is_word_char(line[cx])) {
+                cx++;
+            }
+            if (cx >= static_cast<int>(line.size())) return "";
+        }
     }
 
     int start = cx;

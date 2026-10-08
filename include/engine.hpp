@@ -290,6 +290,8 @@ public:
     void search_jump_next();
     void search_jump_prev();
     void clear_search_highlights();
+    void search_word_under_cursor();
+    void search_word_under_cursor_prev();
 
     std::string get_word_under_cursor();
     std::string get_rg_cache_path() const;

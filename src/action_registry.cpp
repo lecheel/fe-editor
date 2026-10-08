@@ -233,6 +233,20 @@ void ActionRegistry::init_default_actions() {
         }
     );
 
+    register_action("search_word_under_cursor", {"*", "star", "search_word"}, "Search", "Search for word under cursor (*)",
+        [](ActionContext& ctx) {
+            ctx.engine.search_word_under_cursor();
+            return true;
+        }
+    );
+
+    register_action("search_word_under_cursor_prev", {"#", "hash", "search_word_prev"}, "Search", "Search backward for word under cursor (#)",
+        [](ActionContext& ctx) {
+            ctx.engine.search_word_under_cursor_prev();
+            return true;
+        }
+    );
+
     register_action("ripgrep", {"grep", "vg"}, "Search", "Search project with ripgrep (F11)",
         [](ActionContext& ctx) {
             std::string w = ctx.engine.get_word_under_cursor();

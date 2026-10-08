@@ -663,6 +663,12 @@ void VimEngine::handle_normal_mode(const ncinput& ni, uint32_t key) {
         case '/':
             open_search();
             break;
+        case '*':
+            search_word_under_cursor();
+            break;
+        case '#':
+            search_word_under_cursor_prev();
+            break;
         case 'n':
             search_jump_next();
             break;
@@ -911,6 +917,52 @@ void VimEngine::handle_visual_mode(const ncinput& ni, uint32_t key) {
             mode = Mode::NORMAL;
             open_search();
             break;
+        case '*': {
+            Cursor primary = win.cursors.front();
+            Cursor start = std::min(win.visual_anchor, primary);
+            Cursor end = std::max(win.visual_anchor, primary);
+            std::string sel;
+            if (start.y == end.y && start.y >= 0 && start.y < static_cast<int>(buf.lines.size())) {
+                const std::string& l = buf.lines[start.y];
+                int count = std::min(end.x - start.x + 1, static_cast<int>(l.size()) - start.x);
+                if (count > 0 && start.x < static_cast<int>(l.size())) {
+                    sel = l.substr(start.x, count);
+                }
+            }
+            mode = Mode::NORMAL;
+            win.clamp_all_cursors(buf, mode);
+            if (!sel.empty()) {
+                search_query = sel;
+                search_highlight_on = true;
+                search_jump_next();
+            } else {
+                search_word_under_cursor();
+            }
+            break;
+        }
+        case '#': {
+            Cursor primary = win.cursors.front();
+            Cursor start = std::min(win.visual_anchor, primary);
+            Cursor end = std::max(win.visual_anchor, primary);
+            std::string sel;
+            if (start.y == end.y && start.y >= 0 && start.y < static_cast<int>(buf.lines.size())) {
+                const std::string& l = buf.lines[start.y];
+                int count = std::min(end.x - start.x + 1, static_cast<int>(l.size()) - start.x);
+                if (count > 0 && start.x < static_cast<int>(l.size())) {
+                    sel = l.substr(start.x, count);
+                }
+            }
+            mode = Mode::NORMAL;
+            win.clamp_all_cursors(buf, mode);
+            if (!sel.empty()) {
+                search_query = sel;
+                search_highlight_on = true;
+                search_jump_prev();
+            } else {
+                search_word_under_cursor_prev();
+            }
+            break;
+        }
         case 'n':
             search_jump_next();
             break;
