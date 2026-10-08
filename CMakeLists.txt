@@ -23,6 +23,12 @@ add_executable(fe
     src/log.cpp
     src/syntax.cpp
     src/workspace.cpp
+    src/util/json_escape.cpp
+    src/util/path_line_col.cpp
+    src/util/base64.cpp
+    src/util/indent.cpp
+    src/util/bracket_match.cpp
+    src/util/keymap_json.cpp
 )
 
 if(WIN32)

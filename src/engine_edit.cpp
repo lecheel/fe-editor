@@ -4,6 +4,11 @@
 #include "autocomplete.hpp"
 #include "keymap.hpp"
 #include "log.hpp"
+#include "util/base64.hpp"
+#include "util/bracket_match.hpp"
+#include "util/indent.hpp"
+#include "util/keymap_json.hpp"
+#include "util/path_line_col.hpp"
 #include <cmath>
 #include <iostream>
 #include <sstream>
@@ -37,115 +42,6 @@ namespace fs = std::filesystem;
 using namespace Keymap;
 
 namespace {
-
-struct KeymapJsonToken {
-    enum Type { LBRACE, RBRACE, COLON, COMMA, STRING, NUMBER, OTHER } type;
-    std::string value;
-};
-
-std::vector<KeymapJsonToken> tokenize_keymap_json(const std::string& text) {
-    std::vector<KeymapJsonToken> tokens;
-    size_t i = 0;
-    while (i < text.size()) {
-        char c = text[i];
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            i++;
-            continue;
-        }
-        if (c == '{') {
-            tokens.push_back({KeymapJsonToken::LBRACE, "{"});
-            i++;
-        } else if (c == '}') {
-            tokens.push_back({KeymapJsonToken::RBRACE, "}"});
-            i++;
-        } else if (c == ':') {
-            tokens.push_back({KeymapJsonToken::COLON, ":"});
-            i++;
-        } else if (c == ',') {
-            tokens.push_back({KeymapJsonToken::COMMA, ","});
-            i++;
-        } else if (c == '"') {
-            i++;
-            std::string s;
-            while (i < text.size()) {
-                if (text[i] == '\\' && i + 1 < text.size()) {
-                    s += text[i + 1];
-                    i += 2;
-                } else if (text[i] == '"') {
-                    i++;
-                    break;
-                } else {
-                    s += text[i++];
-                }
-            }
-            tokens.push_back({KeymapJsonToken::STRING, s});
-        } else {
-            i++;
-        }
-    }
-    return tokens;
-}
-
-// Vim-style '%' matcher. If (y, x) is on a bracket, its partner is returned.
-// Otherwise the first bracket at or after x on the same line is used.
-// Brackets inside strings and comments are not skipped.
-bool find_matching_bracket(const std::vector<std::string>& lines, int y, int x,
-                           int& out_y, int& out_x) {
-    if (y < 0 || y >= static_cast<int>(lines.size())) return false;
-    static const std::string opens = "([{";
-    static const std::string closes = ")]}";
-
-    const std::string& line = lines[y];
-    int pos = -1;
-    for (int i = std::max(0, x); i < static_cast<int>(line.size()); ++i) {
-        if (opens.find(line[i]) != std::string::npos ||
-            closes.find(line[i]) != std::string::npos) {
-            pos = i;
-            break;
-        }
-    }
-    if (pos < 0) return false;
-
-    char c = line[pos];
-    bool forward = opens.find(c) != std::string::npos;
-    size_t k = forward ? opens.find(c) : closes.find(c);
-    const char open_c = opens[k];
-    const char close_c = closes[k];
-    int depth = 0;
-
-    if (forward) {
-        for (int cy = y; cy < static_cast<int>(lines.size()); ++cy) {
-            const std::string& l = lines[cy];
-            for (int cx = (cy == y ? pos : 0); cx < static_cast<int>(l.size()); ++cx) {
-                if (l[cx] == open_c) {
-                    depth++;
-                } else if (l[cx] == close_c) {
-                    if (--depth == 0) {
-                        out_y = cy;
-                        out_x = cx;
-                        return true;
-                    }
-                }
-            }
-        }
-    } else {
-        for (int cy = y; cy >= 0; --cy) {
-            const std::string& l = lines[cy];
-            for (int cx = (cy == y ? pos : static_cast<int>(l.size()) - 1); cx >= 0; --cx) {
-                if (l[cx] == close_c) {
-                    depth++;
-                } else if (l[cx] == open_c) {
-                    if (--depth == 0) {
-                        out_y = cy;
-                        out_x = cx;
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    return false;
-}
 
 // Moves every cursor to its matching bracket. Shared by the '%' key in
 // normal/visual mode and the "match_bracket" keymap action.
@@ -1000,50 +896,6 @@ REGISTER_COMMAND(
         }
     }
 );
-
-struct IndentInfo {
-    bool use_tabs{false};
-    int tab_size{4};
-    std::string unit{"    "};
-};
-
-inline IndentInfo get_indent_info_for_lang(const std::string& lang) {
-    IndentInfo info;
-    if (lang == "go") {
-        info.use_tabs = true;
-        info.tab_size = 4;
-        info.unit = "\t";
-    } else if (lang == "json" || lang == "yaml" || lang == "yml" ||
-               lang == "html" || lang == "css" || lang == "toml" ||
-               lang == "javascript" || lang == "typescript" || lang == "lua") {
-        info.use_tabs = false;
-        info.tab_size = 2;
-        info.unit = "  ";
-    } else {
-        info.use_tabs = false;
-        info.tab_size = 4;
-        info.unit = "    ";
-    }
-    return info;
-}
-
-inline std::string get_line_comment_prefix(const std::string& lang) {
-    if (lang == "rust" || lang == "go" || lang == "json" ||
-        lang == "javascript" || lang == "typescript" ||
-        lang == "cpp" || lang == "c" || lang == "c++" ||
-        lang == "java" || lang == "kotlin" || lang == "swift" ||
-        lang == "dart" || lang == "php" || lang == "scala") {
-        return "//";
-    }
-    if (lang == "bash" || lang == "sh" || lang == "shell" ||
-        lang == "python" || lang == "toml" ||
-        lang == "yaml" || lang == "yml" || lang == "ruby" ||
-        lang == "perl" || lang == "r" || lang == "makefile" ||
-        lang == "dockerfile" || lang == "cmake" || lang == "nix") {
-        return "#";
-    }
-    return "";
-}
 
 void VimEngine::toggle_line_comments() {
     auto& win = active_win();
@@ -2894,76 +2746,6 @@ void VimEngine::handle_settings_popup(const ncinput& ni, uint32_t key) {
             }
         }
     }
-}
-
-inline std::string compute_line_indent(const std::vector<std::string>& lines, int line_idx, const std::string& lang) {
-    if (line_idx <= 0 || lines.empty()) return "";
-    IndentInfo info = get_indent_info_for_lang(lang);
-
-    int prev_idx = line_idx - 1;
-    while (prev_idx >= 0) {
-        bool all_space = true;
-        for (char c : lines[prev_idx]) {
-            if (!std::isspace(static_cast<unsigned char>(c))) {
-                all_space = false;
-                break;
-            }
-        }
-        if (!all_space) break;
-        prev_idx--;
-    }
-    if (prev_idx < 0) return "";
-
-    const std::string& prev = lines[prev_idx];
-    size_t p = 0;
-    while (p < prev.size() && (prev[p] == ' ' || prev[p] == '\t')) p++;
-    std::string base_indent = prev.substr(0, p);
-    std::string trimmed_prev = prev.substr(p);
-
-    if (lang == "python" || lang == "bash") {
-        size_t h = trimmed_prev.find('#');
-        if (h != std::string::npos) trimmed_prev = trimmed_prev.substr(0, h);
-    } else {
-        size_t c = trimmed_prev.find("//");
-        if (c != std::string::npos) trimmed_prev = trimmed_prev.substr(0, c);
-    }
-    while (!trimmed_prev.empty() && std::isspace(static_cast<unsigned char>(trimmed_prev.back()))) {
-        trimmed_prev.pop_back();
-    }
-
-    if (!trimmed_prev.empty()) {
-        char b = trimmed_prev.back();
-        if (b == '{' || b == '(' || b == '[' || (lang == "python" && b == ':')) {
-            base_indent += info.unit;
-        }
-    }
-
-    if (line_idx < static_cast<int>(lines.size())) {
-        const std::string& cur = lines[line_idx];
-        size_t cp = 0;
-        while (cp < cur.size() && (cur[cp] == ' ' || cur[cp] == '\t')) cp++;
-        std::string trimmed_cur = cur.substr(cp);
-
-        if (!trimmed_cur.empty() && (trimmed_cur[0] == '}' || trimmed_cur[0] == ')' || trimmed_cur[0] == ']')) {
-            if (base_indent.size() >= info.unit.size() &&
-                base_indent.compare(base_indent.size() - info.unit.size(), info.unit.size(), info.unit) == 0) {
-                base_indent.erase(base_indent.size() - info.unit.size());
-            } else if (base_indent.size() >= static_cast<size_t>(info.tab_size)) {
-                base_indent.erase(base_indent.size() - info.tab_size);
-            }
-        } else if (lang == "python" && !trimmed_cur.empty()) {
-            if (trimmed_cur.rfind("elif", 0) == 0 ||
-                trimmed_cur.rfind("else:", 0) == 0 ||
-                trimmed_cur.rfind("except", 0) == 0 ||
-                trimmed_cur.rfind("finally:", 0) == 0) {
-                if (base_indent.size() >= info.unit.size()) {
-                    base_indent.erase(base_indent.size() - info.unit.size());
-                }
-            }
-        }
-    }
-
-    return base_indent;
 }
 
 REGISTER_COMMAND(
@@ -5424,45 +5206,6 @@ bool VimEngine::execute_substitute(const std::string& cmd_str) {
 
 namespace {
 
-bool is_all_digits(const std::string& s) {
-    if (s.empty()) return false;
-    for (char c : s) {
-        if (!std::isdigit(static_cast<unsigned char>(c))) return false;
-    }
-    return true;
-}
-
-// Parses "path:line" and "path:line:col" suffixes. Leaves `path` untouched when
-// the suffix is not numeric or when the full string names an existing file and
-// the stripped one does not.
-void split_path_line_col(std::string& path, int& line, int& col) {
-    size_t last_colon = path.rfind(':');
-    if (last_colon == std::string::npos || last_colon == 0) return;
-
-    std::string part1 = path.substr(last_colon + 1);
-    if (!is_all_digits(part1)) return;
-
-    std::error_code ec;
-    size_t prev_colon = path.rfind(':', last_colon - 1);
-    if (prev_colon != std::string::npos && prev_colon > 0) {
-        std::string part2 = path.substr(prev_colon + 1, last_colon - prev_colon - 1);
-        if (!is_all_digits(part2)) return;
-        std::string ppath = path.substr(0, prev_colon);
-        if (!fs::exists(path, ec) || fs::exists(ppath, ec)) {
-            path = ppath;
-            try { line = std::stoi(part2); } catch (...) {}
-            try { col = std::stoi(part1); } catch (...) {}
-        }
-        return;
-    }
-
-    std::string ppath = path.substr(0, last_colon);
-    if (!fs::exists(path, ec) || fs::exists(ppath, ec)) {
-        path = ppath;
-        try { line = std::stoi(part1); } catch (...) {}
-    }
-}
-
 using ExCommandFn = std::function<void(VimEngine&, std::istringstream&)>;
 
 } // namespace
@@ -6180,52 +5923,6 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         win.deduplicate_cursors();
         update_autocomplete_after_edit();
     }
-}
-
-static const char B64_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static std::string base64_encode(const std::string& in) {
-    std::string out;
-    size_t len = in.size();
-    out.reserve(((len + 2) / 3) * 4);
-
-    for (size_t i = 0; i < len; i += 3) {
-        uint32_t b = (static_cast<uint8_t>(in[i])) << 16;
-        if (i + 1 < len) b |= (static_cast<uint8_t>(in[i + 1])) << 8;
-        if (i + 2 < len) b |= static_cast<uint8_t>(in[i + 2]);
-
-        out.push_back(B64_CHARS[(b >> 18) & 0x3F]);
-        out.push_back(B64_CHARS[(b >> 12) & 0x3F]);
-        out.push_back((i + 1 < len) ? B64_CHARS[(b >> 6) & 0x3F] : '=');
-        out.push_back((i + 2 < len) ? B64_CHARS[b & 0x3F] : '=');
-    }
-    return out;
-}
-
-static std::string base64_decode(const std::string& in) {
-    std::string out;
-    out.reserve(in.size() * 3 / 4);
-    uint32_t buf = 0;
-    int bits = 0;
-
-    for (unsigned char c : in) {
-        int v = -1;
-        if (c >= 'A' && c <= 'Z') v = c - 'A';
-        else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
-        else if (c >= '0' && c <= '9') v = c - '0' + 52;
-        else if (c == '+') v = 62;
-        else if (c == '/') v = 63;
-        else if (c == '=') break;
-        else continue; // Ignore newlines, spaces, or tmux wrapping
-
-        buf = (buf << 6) | static_cast<uint32_t>(v);
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<char>((buf >> bits) & 0xFF));
-        }
-    }
-    return out;
 }
 
 static void osc52_copy(const std::string& text) {
@@ -7142,7 +6839,6 @@ void VimEngine::open_workspace_list() {
     workspace_edit_draft.clear();
     workspace_status_msg.clear();
     show_workspace_list = true;
-    set_info_msg("Workspaces (Alt-0 / :ws): [Enter] Load  [s] Save  [c] Clear  [d] Delete  [e] Name");
 }
 
 void VimEngine::close_workspace_list() {
