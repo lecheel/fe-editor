@@ -32,6 +32,8 @@ add_executable(fe
     src/dot_command.cpp
     src/bracket_jump.cpp
     src/keymap_config.cpp
+    src/action_registry.cpp
+    src/clipboard_os.cpp
 )
 
 if(WIN32)
