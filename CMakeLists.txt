@@ -29,6 +29,7 @@ add_executable(fe
     src/util/indent.cpp
     src/util/bracket_match.cpp
     src/util/keymap_json.cpp
+    src/dot_command.cpp
 )
 
 if(WIN32)
