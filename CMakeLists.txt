@@ -34,6 +34,8 @@ add_executable(fe
     src/keymap_config.cpp
     src/action_registry.cpp
     src/clipboard_os.cpp
+    src/commands.cpp
+    src/cmd_substitute.cpp
 )
 
 if(WIN32)
