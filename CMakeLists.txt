@@ -39,6 +39,8 @@ add_executable(fe
     src/execute_command.cpp
     src/edit_ops.cpp
     src/clipboard_members.cpp
+    src/theme_manager.cpp
+    src/workspace_manager.cpp
 )
 
 if(WIN32)
