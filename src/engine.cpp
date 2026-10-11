@@ -48,6 +48,9 @@ namespace fs = std::filesystem;
 #ifndef NCKEY_F12
 #define NCKEY_F12 (NCKEY_F01 + 11)
 #endif
+#ifndef NCKEY_DEL
+#define NCKEY_DEL 127
+#endif
 
 std::string VimEngine::detect_project_dir(const std::string& start_path) {
     std::string toplevel = detect_git_repo_root(start_path);
@@ -748,6 +751,98 @@ void VimEngine::run() {
             continue;
         }
 
+        // Ripgrep popup: Tab field-switching and per-field text input must be
+        // handled before the normal popup handler, otherwise the replace
+        // pattern can never be typed (the old Tab branch enabled replace mode
+        // but printable keys never reached rg_replace_query).
+        if (show_rg_popup && rg_popup_pre_handle_key(ni, key)) {
+            continue;
+        }
+
         handle_key_input(ni, key);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ripgrep popup (F11 / :vg): owns Tab field-switching and per-field text
+// input. Called from run() before handle_key_input(); returns true when the
+// key was consumed.
+//
+//   Tab        cycle focus: search -> replace -> search
+//   Shift-Tab  focus the search field
+//   Enter      commit active field (run search / apply replacement)
+//   Esc        leave the field; a second Esc closes the popup (old handler)
+//
+// While a field is focused, readline editing is delegated to the shared
+// edit_input_line() helper -- the same editor search ('/') and command (':')
+// input can adopt. With no field focused, every key falls through to the
+// normal result navigation (j/k/Up/Down/{/}/Enter) unchanged.
+// ---------------------------------------------------------------------------
+// NOTE: VimEngine::edit_input_line() is defined once, in src/engine_edit.cpp.
+
+bool VimEngine::rg_popup_pre_handle_key(const ncinput& ni, uint32_t key) {
+    if (!show_rg_popup) return false;
+
+    // run() calls us before handle_key_input(), so apply the same shift
+    // resolution here (otherwise Shift+letter can arrive lowercase).
+    key = Keymap::resolve_shifted(ni, key);
+
+    if (key == NCKEY_TAB || key == '\t') {
+        if (ni.shift || rg_replace_active) {
+            rg_replace_active = false;
+            rg_query_active   = true;
+            rg_query_cursor   = static_cast<int>(rg_query_input.size());
+            set_info_msg("vg search: " + rg_query_input);
+        } else {
+            rg_query_active   = false;
+            rg_replace_active = true;
+            rg_replace_cursor = static_cast<int>(rg_replace_query.size());
+            set_info_msg("vg replace: " + rg_replace_query);
+        }
+        return true;
+    }
+
+    if (!rg_query_active && !rg_replace_active) {
+        return false; // not editing: navigation keys reach the popup handler
+    }
+
+    // F11 while editing: close the popup instead of swallowing the key.
+    if (Keymap::is_fkey(ni, key, 11)) {
+        rg_query_active   = false;
+        rg_replace_active = false;
+        show_rg_popup     = false;
+        set_info_msg("");
+        return true;
+    }
+
+    std::string& field  = rg_replace_active ? rg_replace_query  : rg_query_input;
+    int&         cursor = rg_replace_active ? rg_replace_cursor : rg_query_cursor;
+
+    switch (edit_input_line(field, cursor, ni, key)) {
+        case LineEditResult::COMMIT: {
+            bool was_replace = rg_replace_active;
+            rg_query_active   = false;
+            rg_replace_active = false;
+            if (was_replace) {
+                apply_rg_replace();
+            } else if (!rg_query_input.empty()) {
+                rg_query = rg_query_input;
+                run_ripgrep(rg_query);
+            } else {
+                set_info_msg("vg: empty search pattern");
+            }
+            return true;
+        }
+        case LineEditResult::CANCEL:
+            rg_query_active   = false;
+            rg_replace_active = false;
+            set_info_msg("vg: field edit cancelled");
+            return true;
+        case LineEditResult::EDITED:
+            set_info_msg(std::string(rg_replace_active ? "vg replace: " : "vg search: ") + field);
+            return true;
+        case LineEditResult::IGNORED:
+        default:
+            return true; // swallow everything else while a field is focused
     }
 }

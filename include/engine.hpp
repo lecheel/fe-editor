@@ -230,6 +230,8 @@ private:
     std::string rg_query_input;
     std::string rg_replace_query;
     std::string rg_query;
+    int rg_query_cursor{0};    // readline caret (byte offset) into rg_query_input
+    int rg_replace_cursor{0};  // readline caret (byte offset) into rg_replace_query
     std::vector<RgGroup> rg_groups;
     std::vector<RgMatch> rg_flattened_matches;
     std::vector<RgDisplayLine> rg_display_lines;
@@ -301,6 +303,14 @@ public:
     void rebuild_rg_display_lines();
     void open_selected_rg_match();
     void apply_rg_replace();
+    // Readline-style single-line editor shared by popup inputs (rg
+    // search/replace now; '/' search and ':' command can adopt it the same
+    // way): Ctrl-A/E/B/F, Ctrl-K/U/W, Home/End, Left/Right, Backspace,
+    // insert-at-caret, Enter -> COMMIT, Esc -> CANCEL.
+    enum class LineEditResult { IGNORED, EDITED, COMMIT, CANCEL };
+    LineEditResult edit_input_line(std::string& line, int& cursor,
+                                   const ncinput& ni, uint32_t key);
+    bool rg_popup_pre_handle_key(const ncinput& ni, uint32_t key);
     void handle_rg_popup_input(const ncinput& ni, uint32_t key);
     void render_rg_popup(unsigned int screen_h, unsigned int screen_w);
 

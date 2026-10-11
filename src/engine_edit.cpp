@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
@@ -191,6 +192,7 @@ void VimEngine::handle_key_input(const ncinput& ni, uint32_t key) {
                     show_rg_popup = true;
                     rg_query_active = true;
                     rg_query_input.clear();
+                    rg_query_cursor = 0;
                     set_info_msg("Ripgrep: Enter search pattern...");
                 }
             }
@@ -653,85 +655,202 @@ void VimEngine::handle_filepicker_input(const ncinput& ni, uint32_t key) {
     }
 }
 
+VimEngine::LineEditResult VimEngine::edit_input_line(std::string& line, int& cursor,
+                                                    const ncinput& ni, uint32_t key) {
+    if (cursor < 0) cursor = 0;
+    if (cursor > static_cast<int>(line.size())) cursor = static_cast<int>(line.size());
+
+    if (is_esc(ni, key) || key == 27 || key == NCKEY_ESC) {
+        return LineEditResult::CANCEL;
+    }
+    if (is_enter(ni, key) || key == '\n' || key == '\r' || key == NCKEY_ENTER) {
+        return LineEditResult::COMMIT;
+    }
+
+    // Home / Ctrl-A: move caret to beginning
+    if (key == NCKEY_HOME || is_ctrl(ni, key, 'a') || (ni.ctrl && (key == 'a' || key == 'A')) || key == 1) {
+        cursor = 0;
+        return LineEditResult::EDITED;
+    }
+
+    // End / Ctrl-E: move caret to end
+    if (key == NCKEY_END || is_ctrl(ni, key, 'e') || (ni.ctrl && (key == 'e' || key == 'E')) || key == 5) {
+        cursor = static_cast<int>(line.size());
+        return LineEditResult::EDITED;
+    }
+
+    // Left / Ctrl-B: move backward one UTF-8 character
+    if (key == NCKEY_LEFT || is_ctrl(ni, key, 'b') || (ni.ctrl && (key == 'b' || key == 'B')) || key == 2) {
+        if (cursor > 0) {
+            cursor--;
+            while (cursor > 0 && (static_cast<unsigned char>(line[cursor]) & 0xC0) == 0x80) {
+                cursor--;
+            }
+        }
+        return LineEditResult::EDITED;
+    }
+
+    // Right / Ctrl-F: move forward one UTF-8 character
+    if (key == NCKEY_RIGHT || is_ctrl(ni, key, 'f') || (ni.ctrl && (key == 'f' || key == 'F')) || key == 6) {
+        if (cursor < static_cast<int>(line.size())) {
+            cursor++;
+            while (cursor < static_cast<int>(line.size()) && (static_cast<unsigned char>(line[cursor]) & 0xC0) == 0x80) {
+                cursor++;
+            }
+        }
+        return LineEditResult::EDITED;
+    }
+
+    // Word backward: Alt-B / Ctrl-Left
+    if (is_alt(ni, key, 'b') || (ni.alt && (key == 'b' || key == 'B')) || (ni.ctrl && key == NCKEY_LEFT)) {
+        while (cursor > 0 && std::isspace(static_cast<unsigned char>(line[cursor - 1]))) {
+            cursor--;
+        }
+        while (cursor > 0 && !std::isspace(static_cast<unsigned char>(line[cursor - 1]))) {
+            cursor--;
+        }
+        return LineEditResult::EDITED;
+    }
+
+    // Word forward: Alt-F / Ctrl-Right
+    if (is_alt(ni, key, 'f') || (ni.alt && (key == 'f' || key == 'F')) || (ni.ctrl && key == NCKEY_RIGHT)) {
+        while (cursor < static_cast<int>(line.size()) && !std::isspace(static_cast<unsigned char>(line[cursor]))) {
+            cursor++;
+        }
+        while (cursor < static_cast<int>(line.size()) && std::isspace(static_cast<unsigned char>(line[cursor]))) {
+            cursor++;
+        }
+        return LineEditResult::EDITED;
+    }
+
+    // Delete word forward: Alt-D
+    if (is_alt(ni, key, 'd') || (ni.alt && (key == 'd' || key == 'D'))) {
+        int end_pos = cursor;
+        while (end_pos < static_cast<int>(line.size()) && std::isspace(static_cast<unsigned char>(line[end_pos]))) {
+            end_pos++;
+        }
+        while (end_pos < static_cast<int>(line.size()) && !std::isspace(static_cast<unsigned char>(line[end_pos]))) {
+            end_pos++;
+        }
+        line.erase(cursor, end_pos - cursor);
+        return LineEditResult::EDITED;
+    }
+
+    // Backspace / Ctrl-H: delete char before caret
+    if (is_backspace(ni, key) || is_ctrl(ni, key, 'h') || (ni.ctrl && (key == 'h' || key == 'H')) || key == 8 || key == 127 || key == NCKEY_BACKSPACE) {
+        if ((ni.alt) && cursor > 0) {
+            // Alt-Backspace: delete word backward
+            int old_cursor = cursor;
+            while (cursor > 0 && std::isspace(static_cast<unsigned char>(line[cursor - 1]))) {
+                cursor--;
+            }
+            while (cursor > 0 && !std::isspace(static_cast<unsigned char>(line[cursor - 1]))) {
+                cursor--;
+            }
+            line.erase(cursor, old_cursor - cursor);
+            return LineEditResult::EDITED;
+        }
+        if (cursor > 0) {
+            int prev = cursor - 1;
+            while (prev > 0 && (static_cast<unsigned char>(line[prev]) & 0xC0) == 0x80) {
+                prev--;
+            }
+            line.erase(prev, cursor - prev);
+            cursor = prev;
+        }
+        return LineEditResult::EDITED;
+    }
+
+    // Delete / Ctrl-D: delete char at caret
+    if (key == NCKEY_DEL || is_ctrl(ni, key, 'd') || (ni.ctrl && (key == 'd' || key == 'D')) || key == 4) {
+        if (cursor < static_cast<int>(line.size())) {
+            int next = cursor + 1;
+            while (next < static_cast<int>(line.size()) && (static_cast<unsigned char>(line[next]) & 0xC0) == 0x80) {
+                next++;
+            }
+            line.erase(cursor, next - cursor);
+        }
+        return LineEditResult::EDITED;
+    }
+
+    // Ctrl-U: kill from caret to beginning of line
+    if (is_ctrl(ni, key, 'u') || (ni.ctrl && (key == 'u' || key == 'U')) || key == 21) {
+        line.erase(0, cursor);
+        cursor = 0;
+        return LineEditResult::EDITED;
+    }
+
+    // Ctrl-K: kill from caret to end of line
+    if (is_ctrl(ni, key, 'k') || (ni.ctrl && (key == 'k' || key == 'K')) || key == 11) {
+        line.erase(cursor);
+        return LineEditResult::EDITED;
+    }
+
+    // Ctrl-W: delete backward word
+    if (is_ctrl(ni, key, 'w') || (ni.ctrl && (key == 'w' || key == 'W')) || key == 23) {
+        int old_cursor = cursor;
+        while (cursor > 0 && std::isspace(static_cast<unsigned char>(line[cursor - 1]))) {
+            cursor--;
+        }
+        while (cursor > 0 && !std::isspace(static_cast<unsigned char>(line[cursor - 1]))) {
+            cursor--;
+        }
+        line.erase(cursor, old_cursor - cursor);
+        return LineEditResult::EDITED;
+    }
+
+    // Clipboard Paste: Ctrl-Shift-V / Ctrl-Y
+    if (Keymap::is_ctrl_shift(ni, key, 'v') || is_ctrl(ni, key, 'y') || (ni.ctrl && (key == 'y' || key == 'Y')) || key == 25) {
+        std::string clip = get_system_clipboard();
+        std::string sanitized;
+        for (char c : clip) {
+            if (c == '\r' || c == '\n') break;
+            sanitized += c;
+        }
+        if (!sanitized.empty()) {
+            line.insert(cursor, sanitized);
+            cursor += static_cast<int>(sanitized.size());
+        }
+        return LineEditResult::EDITED;
+    }
+
+    // Space
+    if (key == ' ' && !ni.ctrl && !ni.alt) {
+        line.insert(cursor, 1, ' ');
+        cursor++;
+        return LineEditResult::EDITED;
+    }
+
+    // Printable ASCII
+    if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
+        line.insert(cursor, 1, static_cast<char>(key));
+        cursor++;
+        return LineEditResult::EDITED;
+    }
+
+    // UTF-8
+    if (ni.utf8[0] != '\0' && !ni.alt && !ni.ctrl) {
+        const char* s = reinterpret_cast<const char*>(ni.utf8);
+        size_t len = std::strlen(s);
+        line.insert(cursor, s);
+        cursor += static_cast<int>(len);
+        return LineEditResult::EDITED;
+    }
+
+    return LineEditResult::IGNORED;
+}
+
+// NOTE: VimEngine::rg_popup_pre_handle_key() is defined once, in src/engine.cpp.
+
 void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
-    if (rg_query_active) {
-        if (is_esc(ni, key) || is_fkey(ni, key, 11)) {
-            rg_query_active = false;
-            rg_query_input.clear();
-            if (rg_groups.empty() && rg_query.empty()) {
-                show_rg_popup = false;
-            }
-            set_info_msg(rg_groups.empty() ? "" : "Search cancelled.");
-            return;
-        }
-
-        if (is_enter(ni, key)) {
-            if (!rg_query_input.empty()) {
-                std::string q = rg_query_input;
-                rg_query_active = false;
-                rg_query_input.clear();
-                run_ripgrep(q);
-            } else if (!rg_query.empty()) {
-                rg_query_active = false;
-                run_ripgrep(rg_query);
-            } else {
-                set_info_msg("Please enter a search pattern.");
-            }
-            return;
-        }
-
-        if (is_backspace(ni, key)) {
-            if (!rg_query_input.empty()) {
-                rg_query_input.pop_back();
-            }
-            return;
-        }
-
-        if (is_ctrl(ni, key, 'u')) {
-            rg_query_input.clear();
-            return;
-        }
-
-        if (is_ctrl(ni, key, 'w')) {
-            while (!rg_query_input.empty() && std::isspace(static_cast<unsigned char>(rg_query_input.back()))) {
-                rg_query_input.pop_back();
-            }
-            while (!rg_query_input.empty() && !std::isspace(static_cast<unsigned char>(rg_query_input.back()))) {
-                rg_query_input.pop_back();
-            }
-            return;
-        }
-
-        if (Keymap::is_ctrl_shift(ni, key, 'v')) {
-            std::string clip = get_system_clipboard();
-            for (char c : clip) {
-                if (c == '\r' || c == '\n') break;
-                rg_query_input += c;
-            }
-            return;
-        }
-
-        if (key == ' ') {
-            rg_query_input += ' ';
-            return;
-        }
-
-        if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
-            rg_query_input += static_cast<char>(key);
-            return;
-        }
-
-        if (ni.utf8[0] != '\0' && !ni.alt && !ni.ctrl) {
-            rg_query_input += reinterpret_cast<const char*>(ni.utf8);
-            return;
-        }
-
+    if (rg_popup_pre_handle_key(ni, key)) {
         return;
     }
 
     if (key == '/' && !rg_replace_active) {
         rg_query_active = true;
         rg_query_input.clear();
+        rg_query_cursor = 0;
         set_info_msg("Ripgrep: Enter search pattern...");
         return;
     }
@@ -750,6 +869,9 @@ void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
 
     if (key == '\t' || key == NCKEY_TAB) {
         rg_replace_active = !rg_replace_active;
+        if (rg_replace_active) {
+            rg_replace_cursor = static_cast<int>(rg_replace_query.size());
+        }
         return;
     }
 
@@ -763,49 +885,36 @@ void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
     }
 
     if (key == ' ') {
-        if (rg_replace_active) {
-            if (ni.shift || ni.ctrl || ni.alt) {
-                rg_replace_query += ' ';
-                return;
-            }
-            if (!rg_display_lines.empty() &&
-                rg_selected_display_idx >= 0 &&
-                rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
+        if (!rg_display_lines.empty() &&
+            rg_selected_display_idx >= 0 &&
+            rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
 
-                const auto& dline = rg_display_lines[rg_selected_display_idx];
-                if (dline.is_file_header) {
-                    bool any_included = false;
-                    for (const auto& m : rg_flattened_matches) {
-                        if (m.file == dline.file && !m.ignored) {
-                            any_included = true;
-                            break;
-                        }
+            const auto& dline = rg_display_lines[rg_selected_display_idx];
+            if (dline.is_file_header) {
+                bool any_included = false;
+                for (const auto& m : rg_flattened_matches) {
+                    if (m.file == dline.file && !m.ignored) {
+                        any_included = true;
+                        break;
                     }
-                    for (auto& m : rg_flattened_matches) {
-                        if (m.file == dline.file) {
-                            m.ignored = any_included;
-                        }
-                    }
-                    set_info_msg(any_included ? "File ignored for replace: " + dline.file
-                                              : "File included for replace: " + dline.file);
-                } else if (dline.match_idx >= 0 && dline.match_idx < static_cast<int>(rg_flattened_matches.size())) {
-                    rg_flattened_matches[dline.match_idx].ignored = !rg_flattened_matches[dline.match_idx].ignored;
-                    set_info_msg(rg_flattened_matches[dline.match_idx].ignored ? "Line ignored for replace." : "Line included for replace.");
                 }
+                for (auto& m : rg_flattened_matches) {
+                    if (m.file == dline.file) {
+                        m.ignored = any_included;
+                    }
+                }
+                set_info_msg(any_included ? "File ignored for replace: " + dline.file
+                                          : "File included for replace: " + dline.file);
+            } else if (dline.match_idx >= 0 && dline.match_idx < static_cast<int>(rg_flattened_matches.size())) {
+                rg_flattened_matches[dline.match_idx].ignored = !rg_flattened_matches[dline.match_idx].ignored;
+                set_info_msg(rg_flattened_matches[dline.match_idx].ignored ? "Line ignored for replace." : "Line included for replace.");
             }
-            return;
-        }
-    }
-
-    if (rg_replace_active && is_backspace(ni, key)) {
-        if (!rg_replace_query.empty()) {
-            rg_replace_query.pop_back();
         }
         return;
     }
 
     if (key == NCKEY_UP || (!rg_replace_active && (key == 'k' || key == 'K')) ||
-        is_ctrl(ni, key, 'p') || is_ctrl(ni, key, 'k')) {
+        is_ctrl(ni, key, 'p') || (!rg_replace_active && is_ctrl(ni, key, 'k'))) {
         if (rg_selected_display_idx > 0) {
             rg_selected_display_idx--;
         } else if (!rg_display_lines.empty()) {
@@ -819,7 +928,7 @@ void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
     }
 
     if (key == NCKEY_DOWN || (!rg_replace_active && (key == 'j' || key == 'J')) ||
-        is_ctrl(ni, key, 'n') || is_ctrl(ni, key, 'j')) {
+        is_ctrl(ni, key, 'n') || (!rg_replace_active && is_ctrl(ni, key, 'j'))) {
         if (rg_selected_display_idx + 1 < static_cast<int>(rg_display_lines.size())) {
             rg_selected_display_idx++;
         } else {
@@ -842,33 +951,12 @@ void VimEngine::handle_rg_popup_input(const ncinput& ni, uint32_t key) {
     }
 
     if (key == NCKEY_PGDOWN) {
-        if (key == NCKEY_PGDOWN) {
-            rg_selected_display_idx = std::min(static_cast<int>(rg_display_lines.size()) - 1, rg_selected_display_idx + 10);
-            if (rg_selected_display_idx >= 0 && rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
-                int midx = rg_display_lines[rg_selected_display_idx].match_idx;
-                if (midx >= 0) rg_selected_match_idx = midx;
-            }
-            return;
+        rg_selected_display_idx = std::min(static_cast<int>(rg_display_lines.size()) - 1, rg_selected_display_idx + 10);
+        if (rg_selected_display_idx >= 0 && rg_selected_display_idx < static_cast<int>(rg_display_lines.size())) {
+            int midx = rg_display_lines[rg_selected_display_idx].match_idx;
+            if (midx >= 0) rg_selected_match_idx = midx;
         }
-
-        if (rg_replace_active) {
-            if (Keymap::is_ctrl_shift(ni, key, 'v')) {
-                std::string clip = get_system_clipboard();
-                for (char c : clip) {
-                    if (c == '\r' || c == '\n') break;
-                    rg_replace_query += c;
-                }
-                return;
-            }
-            if (!ni.alt && !ni.ctrl && key >= 32 && key < 127) {
-                rg_replace_query += static_cast<char>(key);
-                return;
-            }
-            if (ni.utf8[0] != '\0' && !ni.alt && !ni.ctrl) {
-                rg_replace_query += reinterpret_cast<const char*>(ni.utf8);
-                return;
-            }
-        }
+        return;
     }
 
     if (key == ']' || key == '}') {

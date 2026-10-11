@@ -2357,18 +2357,60 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     ncplane_set_fg_rgb8(stdplane, 255, 215, 60);
     ncplane_putstr_yx(stdplane, popup_y, popup_x + 2, title.c_str());
 
+    // Editable field renderer: draws text with a visible caret at the byte
+    // offset `cursor` (reverse-video block), scrolling horizontally so the
+    // caret always stays visible. Needed so Home/End/Ctrl-A/E/B/F/Left/Right
+    // actually show where the caret is.
+    auto draw_field = [&](int y, int x, const std::string& text, int cursor, int max_w,
+                          uint8_t fr, uint8_t fg, uint8_t fb) {
+        if (max_w <= 1) return;
+        int n = static_cast<int>(text.size());
+        cursor = std::clamp(cursor, 0, n);
+
+        int start = 0;
+        while (start < cursor &&
+               compute_display_col(text, cursor) - compute_display_col(text, start) >= max_w - 1) {
+            ++start;
+            while (start < n && (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80) ++start;
+        }
+
+        int clen = 0;
+        if (cursor < n) {
+            clen = 1;
+            while (cursor + clen < n &&
+                   (static_cast<unsigned char>(text[cursor + clen]) & 0xC0) == 0x80) ++clen;
+        }
+
+        std::string before = text.substr(start, cursor - start);
+        std::string at     = (cursor < n) ? text.substr(cursor, clen) : std::string(" ");
+        std::string after  = (cursor < n) ? text.substr(cursor + clen) : std::string();
+
+        int bw = compute_display_col(before, static_cast<int>(before.size()));
+
+        ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+        ncplane_set_fg_rgb8(stdplane, fr, fg, fb);
+        if (!before.empty()) ncplane_putstr_yx(stdplane, y, x, before.c_str());
+
+        // caret: inverted colors
+        ncplane_set_bg_rgb8(stdplane, fr, fg, fb);
+        ncplane_set_fg_rgb8(stdplane, 18, 20, 26);
+        ncplane_putstr_yx(stdplane, y, x + bw, at.c_str());
+
+        ncplane_set_bg_rgb8(stdplane, 18, 20, 26);
+        ncplane_set_fg_rgb8(stdplane, fr, fg, fb);
+        int room = max_w - bw - 1;
+        if (!after.empty() && room > 0) {
+            if (static_cast<int>(after.size()) > room) after = after.substr(0, room);
+            ncplane_putstr_yx(stdplane, y, x + bw + 1, after.c_str());
+        }
+    };
+
     // Query & Stats line
     ncplane_set_fg_rgb8(stdplane, 240, 200, 80);
     ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 2, "🔍 Query:   ");
     if (rg_query_active) {
-        ncplane_set_fg_rgb8(stdplane, 80, 220, 255);
-        std::string disp = rg_query_input + "_";
-        int max_q_w = popup_w - 36;
-        if (static_cast<int>(disp.size()) > max_q_w && max_q_w > 0) {
-            disp = disp.substr(disp.size() - max_q_w);
-        }
-        ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, disp.c_str());
-        notcurses_cursor_enable(nc, popup_y + 1, popup_x + 14 + static_cast<int>(rg_query_input.size()));
+        draw_field(popup_y + 1, popup_x + 14, rg_query_input, rg_query_cursor,
+                   popup_w - 36, 80, 220, 255);
     } else {
         ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
         ncplane_putstr_yx(stdplane, popup_y + 1, popup_x + 14, rg_query.c_str());
@@ -2402,9 +2444,8 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     if (rg_replace_active) {
         ncplane_set_fg_rgb8(stdplane, 80, 220, 120);
         ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + 2, "🔄 Replace: ");
-        ncplane_set_fg_rgb8(stdplane, 255, 255, 255);
-        std::string disp = rg_replace_query + "_";
-        ncplane_putstr_yx(stdplane, popup_y + 2, popup_x + 14, disp.c_str());
+        draw_field(popup_y + 2, popup_x + 14, rg_replace_query, rg_replace_cursor,
+                   popup_w - 18, 255, 255, 255);
     }
 
     if (rg_selected_display_idx < rg_scroll) {
