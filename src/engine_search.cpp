@@ -2350,7 +2350,7 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     if (rg_query_active) {
         title = " Ripgrep Search Mode (Enter: Run / Esc: Cancel) ";
     } else if (rg_replace_active) {
-        title = " Ripgrep Replace Mode (TAB: View / Enter: Apply) ";
+        title = " Ripgrep Replace Mode (Tab: Search field / Enter: Apply) ";
     } else {
         title = " Ripgrep View Mode (:vg / F11 / TAB: Replace / /: Search) ";
     }
@@ -2631,7 +2631,7 @@ void VimEngine::render_rg_popup(unsigned int screen_h, unsigned int screen_w) {
     // Footer actions
     std::string footer;
     if (rg_replace_active) {
-        footer = " [▲/▼] Navigate  [Space] Toggle Ignore  [Enter] Apply  [TAB] View Mode  [Esc] Cancel ";
+        footer = " [▲/▼] Navigate  [Ctrl-T] Toggle Ignore  [Enter] Apply  [Tab] Search field  [Esc] Cancel ";
         ncplane_set_fg_rgb8(stdplane, 80, 230, 140);
     } else if (rg_query_active) {
         footer = " [Enter] Run Search  [Ctrl-U] Clear  [Ctrl-Shift-V] Paste  [Esc] Cancel ";
