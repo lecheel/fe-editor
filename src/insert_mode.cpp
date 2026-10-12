@@ -35,7 +35,24 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
             return;
         }
         std::string pfx = get_prefix_before_cursor(buf.lines[primary.y], primary.x);
-        if (ac.manual && pfx.size() >= 3) {
+        bool is_path = (pfx.rfind("./", 0) == 0 || pfx.rfind("../", 0) == 0);
+
+        if (is_path && pfx.size() >= 2) {
+            std::string bpath = !buf.file_path.empty() ? buf.file_path : buf.name;
+            auto cands = find_path_candidates(pfx, project_dir, bpath, buf.lines);
+            if (!cands.empty()) {
+                ac.active = true;
+                ac.manual = false;
+                ac.prefix = pfx;
+                ac.candidates = std::move(cands);
+                ac.selected_idx = 0;
+                set_info_msg("Autocomplete [1/" + std::to_string(ac.candidates.size()) + "]: " +
+                             ac.candidates[0] + "  (▲/▼ cycle, ▶/Tab accept)");
+            } else {
+                ac.reset();
+                if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
+            }
+        } else if (ac.manual && pfx.size() >= 3) {
             auto cands = find_local_buffer_candidates(buf.lines, primary.y, pfx);
             if (!cands.empty()) {
                 ac.active = true;
@@ -43,7 +60,7 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
                 ac.candidates = std::move(cands);
                 ac.selected_idx = 0;
                 set_info_msg("Autocomplete [1/" + std::to_string(ac.candidates.size()) + "]: " +
-                             ac.candidates[0] + "  (▲/▼ cycle, ▶ accept)");
+                             ac.candidates[0] + "  (▲/▼ cycle, ▶/Tab accept)");
             } else {
                 ac.reset();
                 if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
@@ -57,7 +74,7 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
                 ac.candidates = std::move(cands);
                 ac.selected_idx = 0;
                 set_info_msg("Autocomplete [1/" + std::to_string(ac.candidates.size()) + "]: " +
-                             ac.candidates[0] + "  (▲/▼ cycle, ▶ accept)");
+                             ac.candidates[0] + "  (▲/▼ cycle, ▶/Tab accept)");
             } else {
                 ac.reset();
                 if (info_msg.rfind("Autocomplete", 0) == 0) set_info_msg("");
@@ -68,19 +85,42 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
         }
     };
 
-    // Alt-/ manual trigger (>= 3 chars)
+    // Alt-/ manual trigger (>= 3 chars, or >= 2 chars for paths)
     bool is_alt_slash = ni.alt && (ni.id == '/' || key == '/' || ni.id == '?' || key == '?' ||
                                    (ni.utf8[0] == '/' && ni.utf8[1] == '\0'));
     if (is_alt_slash) {
         Cursor primary = win.cursors.front();
         if (primary.y >= 0 && primary.y < static_cast<int>(buf.lines.size())) {
             std::string pfx = get_prefix_before_cursor(buf.lines[primary.y], primary.x);
-            if (pfx.size() >= 3) {
+            bool is_path = (pfx.rfind("./", 0) == 0 || pfx.rfind("../", 0) == 0);
+            if (is_path && pfx.size() >= 2) {
                 if (ac.active && ac.prefix == pfx && !ac.candidates.empty()) {
                     ac.selected_idx = (ac.selected_idx + 1) % ac.candidates.size();
                     set_info_msg("Autocomplete [" + std::to_string(ac.selected_idx + 1) + "/" +
                                  std::to_string(ac.candidates.size()) + "]: " +
-                                 ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶ accept)");
+                                 ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶/Tab accept)");
+                } else {
+                    std::string bpath = !buf.file_path.empty() ? buf.file_path : buf.name;
+                    auto cands = find_path_candidates(pfx, project_dir, bpath, buf.lines);
+                    if (!cands.empty()) {
+                        ac.active = true;
+                        ac.manual = true;
+                        ac.prefix = pfx;
+                        ac.candidates = std::move(cands);
+                        ac.selected_idx = 0;
+                        set_info_msg("Autocomplete [1/" + std::to_string(ac.candidates.size()) + "]: " +
+                                     ac.candidates[0] + "  (▲/▼ cycle, ▶/Tab accept)");
+                    } else {
+                        ac.reset();
+                        set_info_msg("Autocomplete: No path matching '" + pfx + "'");
+                    }
+                }
+            } else if (pfx.size() >= 3) {
+                if (ac.active && ac.prefix == pfx && !ac.candidates.empty()) {
+                    ac.selected_idx = (ac.selected_idx + 1) % ac.candidates.size();
+                    set_info_msg("Autocomplete [" + std::to_string(ac.selected_idx + 1) + "/" +
+                                 std::to_string(ac.candidates.size()) + "]: " +
+                                 ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶/Tab accept)");
                 } else {
                     auto cands = find_local_buffer_candidates(buf.lines, primary.y, pfx);
                     if (!cands.empty()) {
@@ -90,36 +130,43 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
                         ac.candidates = std::move(cands);
                         ac.selected_idx = 0;
                         set_info_msg("Autocomplete [1/" + std::to_string(ac.candidates.size()) + "]: " +
-                                     ac.candidates[0] + "  (▲/▼ cycle, ▶ accept)");
+                                     ac.candidates[0] + "  (▲/▼ cycle, ▶/Tab accept)");
                     } else {
                         ac.reset();
                         set_info_msg("Autocomplete: No candidates matching '" + pfx + "'");
                     }
                 }
             } else {
-                set_info_msg("Autocomplete: Prefix too short (requires >= 3 chars for Alt-/)");
+                set_info_msg("Autocomplete: Prefix too short (requires >= 3 chars for Alt-/, >= 2 for ./)");
             }
         }
         return;
     }
 
-    // Intercept Up / Down / Right when autocomplete candidate ghost text is active
+    // Intercept Up / Down / Right / Tab when autocomplete candidate ghost text is active
     if (ac.active && !ac.candidates.empty() && win.cursors.size() == 1) {
+        if (ni.shift && (key == '\t' || key == NCKEY_TAB || ni.id == '\t' || ni.id == NCKEY_TAB)) {
+            ac.selected_idx = (ac.selected_idx + ac.candidates.size() - 1) % ac.candidates.size();
+            set_info_msg("Autocomplete [" + std::to_string(ac.selected_idx + 1) + "/" +
+                         std::to_string(ac.candidates.size()) + "]: " +
+                         ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶/Tab accept)");
+            return;
+        }
         if (key == NCKEY_UP) {
             ac.selected_idx = (ac.selected_idx + ac.candidates.size() - 1) % ac.candidates.size();
             set_info_msg("Autocomplete [" + std::to_string(ac.selected_idx + 1) + "/" +
                          std::to_string(ac.candidates.size()) + "]: " +
-                         ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶ accept)");
+                         ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶/Tab accept)");
             return;
         }
         if (key == NCKEY_DOWN) {
             ac.selected_idx = (ac.selected_idx + 1) % ac.candidates.size();
             set_info_msg("Autocomplete [" + std::to_string(ac.selected_idx + 1) + "/" +
                          std::to_string(ac.candidates.size()) + "]: " +
-                         ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶ accept)");
+                         ac.candidates[ac.selected_idx] + "  (▲/▼ cycle, ▶/Tab accept)");
             return;
         }
-        if (key == NCKEY_RIGHT) {
+        if (key == NCKEY_RIGHT || key == '\t' || key == NCKEY_TAB) {
             std::string cand = ac.get_selected_candidate();
             std::string pfx = ac.prefix;
             if (!cand.empty()) {
@@ -145,6 +192,9 @@ void VimEngine::handle_insert_mode(const ncinput& ni, uint32_t key) {
                 }
                 ac.reset();
                 set_info_msg("Completed: " + cand);
+                if (!cand.empty() && cand.back() == '/') {
+                    update_autocomplete_after_edit();
+                }
                 return;
             }
         }

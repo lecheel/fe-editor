@@ -1231,6 +1231,7 @@ void VimEngine::render_window(Window& win, bool is_active) {
 
             size_t byte_idx = 0;
             int col_x = 0;
+            int cursor_screen_col = -1;
 
             while (byte_idx < line.size()) {
                 unsigned char lead = static_cast<unsigned char>(line[byte_idx]);
@@ -1249,6 +1250,9 @@ void VimEngine::render_window(Window& win, bool is_active) {
                 }
 
                 int orig_byte = static_cast<int>(byte_idx) + scroll_x_off;
+                if (orig_byte == primary.x) {
+                    cursor_screen_col = col_x + col_adjust;
+                }
                 bool has_cursor = cursor_set.count({line_idx, orig_byte});
                 bool in_visual = false;
                 if (is_active) {
@@ -1314,6 +1318,9 @@ void VimEngine::render_window(Window& win, bool is_active) {
             }
 
             int end_screen_col = col_x + col_adjust;
+            if (cursor_screen_col < 0) {
+                cursor_screen_col = end_screen_col;
+            }
             if (end_screen_col >= 0 && end_screen_col < text_avail_w) {
                 int draw_x = win.x + gutter_w + end_screen_col;
                 bool has_cursor = cursor_set.count({line_idx, static_cast<int>(full_line.size())});
@@ -1346,7 +1353,7 @@ void VimEngine::render_window(Window& win, bool is_active) {
             }
 
             if (ghost_len > 0) {
-                int ghost_col = end_screen_col;
+                int ghost_col = (cursor_screen_col >= 0) ? cursor_screen_col : end_screen_col;
                 for (int gi = 0; gi < ghost_len; ++gi) {
                     int sc = ghost_col + gi;
                     if (sc >= 0 && sc < text_avail_w) {
@@ -1357,6 +1364,34 @@ void VimEngine::render_window(Window& win, bool is_active) {
                         char ch[2] = {ghost_str[gi], '\0'};
                         ncplane_putstr_yx(stdplane, draw_y, draw_x, ch);
                         ncplane_off_styles(stdplane, NCSTYLE_ITALIC);
+                    }
+                }
+
+                // If there are characters after the cursor, re-render them shifted after ghost text preview
+                if (primary.x < static_cast<int>(full_line.size())) {
+                    std::string tail = full_line.substr(primary.x);
+                    int tail_col = ghost_col + ghost_len;
+                    size_t t_bi = 0;
+                    while (t_bi < tail.size()) {
+                        unsigned char t_lead = static_cast<unsigned char>(tail[t_bi]);
+                        int t_clen = Keymap::utf8_char_len(t_lead);
+                        if (t_bi + t_clen > tail.size()) t_clen = static_cast<int>(tail.size() - t_bi);
+                        std::string t_glyph = tail.substr(t_bi, t_clen);
+                        int t_cw = 1;
+                        wchar_t t_wc = 0;
+                        mbstate_t t_mbs = {};
+                        if (mbrtowc(&t_wc, t_glyph.data(), t_glyph.size(), &t_mbs) > 0) {
+                            int w = wcwidth(t_wc);
+                            if (w > 0) t_cw = w;
+                        }
+                        if (tail_col >= 0 && tail_col < text_avail_w) {
+                            int draw_x = win.x + gutter_w + tail_col;
+                            ncplane_set_fg_rgb8(stdplane, ui_bg.fg.r, ui_bg.fg.g, ui_bg.fg.b);
+                            ncplane_set_bg_rgb8(stdplane, ui_bg.bg.r, ui_bg.bg.g, ui_bg.bg.b);
+                            ncplane_putstr_yx(stdplane, draw_y, draw_x, t_glyph.c_str());
+                        }
+                        t_bi += t_clen;
+                        tail_col += t_cw;
                     }
                 }
             }
