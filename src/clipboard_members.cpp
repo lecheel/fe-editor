@@ -259,7 +259,7 @@ bool VimEngine::handle_bracketed_paste_fast() {
 }
 
 bool VimEngine::handle_paste_burst(const ncinput& first_ni, uint32_t first_key) {
-    if (mode != Mode::INSERT) return false;
+    if (mode != Mode::INSERT && !search_active && mode != Mode::COMMAND) return false;
     bool popup_active = show_git_status ||
                         show_hunk_diff ||
                         show_theme_popup ||
@@ -489,6 +489,20 @@ void VimEngine::paste_full_replace() {
 void VimEngine::paste_text_raw(const std::string& text) {
     if (text.empty()) return;
 
+    if (search_active) {
+        std::string flat;
+        for (char c : text) {
+            if (c == '\r' || c == '\n') break;
+            flat += c;
+        }
+        if (!flat.empty()) {
+            search_input.insert(search_input_cursor, flat);
+            search_input_cursor += static_cast<int>(flat.size());
+            update_search_incremental();
+        }
+        return;
+    }
+
     if (mode == Mode::COMMAND) {
         std::string flat;
         for (char c : text) {
@@ -497,6 +511,22 @@ void VimEngine::paste_text_raw(const std::string& text) {
         }
         cmd_buffer.insert(cmd_cursor_pos, flat);
         cmd_cursor_pos += static_cast<int>(flat.size());
+        return;
+    }
+
+    if (show_rg_popup && (rg_query_active || rg_replace_active)) {
+        std::string flat;
+        for (char c : text) {
+            if (c == '\r' || c == '\n') break;
+            flat += c;
+        }
+        if (!flat.empty()) {
+            std::string& field = rg_replace_active ? rg_replace_query : rg_query_input;
+            int& cursor = rg_replace_active ? rg_replace_cursor : rg_query_cursor;
+            field.insert(cursor, flat);
+            cursor += static_cast<int>(flat.size());
+            set_info_msg(std::string(rg_replace_active ? "vg replace: " : "vg search: ") + field);
+        }
         return;
     }
 
